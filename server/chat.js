@@ -32,6 +32,7 @@ function taskLine(t, { done, detail, now }) {
   if (t.estimateMinutes) parts.push(`estimate ~${formatEstimate(t.estimateMinutes)}`);
   if (!done && t.startAt) parts.push(`starts ${t.startAt}`);
   if (due) parts.push(`${due.label} (${localDue(t)})`);
+  if (!done && t.repeat) parts.push(`repeats ${t.repeat}`);
   if (done && t.completedAt) parts.push(`completed ${localDay(new Date(t.completedAt))}`);
   if (t.subtasks.length) parts.push(`subtasks ${t.subtasks.filter((s) => s.done).length}/${t.subtasks.length}`);
   if (t.timeSpent || t.timerStartedAt) parts.push(`${formatDuration(t.timeSpent + (t.timerStartedAt ? (now - Date.parse(t.timerStartedAt)) / 1000 : 0))} tracked${t.timerStartedAt ? ' (timer running)' : ''}`);
@@ -109,9 +110,10 @@ Only propose changes when the user asks for them or clearly agrees to a suggesti
 \`\`\`
 
 The block is a JSON array (at most ${MAX_ACTIONS} items) using these types:
-- {"type":"create_task","project":"<name>","column":"<name, optional>","title":"...","description":"...","priority":"low|medium|high|urgent","start":"YYYY-MM-DD","due":"YYYY-MM-DD or YYYY-MM-DDTHH:MM","estimate":"XS|S|M|L|XL or e.g. 2h, 90m, 1d","subtasks":["..."],"tags":["..."]}
-- {"type":"update_task","task":<id>, then any of "title", "description", "priority", "start", "due", "estimate" (use "" to remove any of them), "add_tags":["..."], "remove_tags":["..."]}
+- {"type":"create_task","project":"<name>","column":"<name, optional>","title":"...","description":"...","priority":"low|medium|high|urgent","start":"YYYY-MM-DD","due":"YYYY-MM-DD or YYYY-MM-DDTHH:MM","estimate":"XS|S|M|L|XL or e.g. 2h, 90m, 1d","repeat":"daily|weekdays|weekly|biweekly|monthly|yearly","subtasks":["..."],"tags":["..."]}
+- {"type":"update_task","task":<id>, then any of "title", "description", "priority", "start", "due", "estimate", "repeat" (use "" to remove any of them), "add_tags":["..."], "remove_tags":["..."]}
 - {"type":"move_task","task":<id>,"column":"<column name in that task's project>"}
+- {"type":"move_task","task":<id>,"project":"<another project's name>","column":"<optional; defaults to the column with the same name>"}
 - {"type":"complete_task","task":<id>}
 - {"type":"archive_task","task":<id>}
 - {"type":"add_subtasks","task":<id>,"subtasks":["..."]}

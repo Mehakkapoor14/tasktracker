@@ -7,6 +7,7 @@ import * as store from './db.js';
 import { dueInfo } from '../shared/due.js';
 import { changeTags } from '../shared/tags.js';
 import { formatEstimate, formatMoney, parseEstimate, sizeOf } from '../shared/estimate.js';
+import { parseRepeat, REPEATS } from '../shared/repeat.js';
 
 export const MAX_ACTIONS = 20;
 
@@ -115,6 +116,16 @@ function estimate(v) {
   }
 }
 
+/** A REPEATS key, '' to stop repeating, or undefined when not given. */
+function repeat(v) {
+  if (v === undefined) return undefined;
+  const r = parseRepeat(v);
+  if (r == null) fail(`“${v}” isn’t a repeat. Use daily, weekdays, weekly, biweekly, monthly or yearly.`);
+  return r;
+}
+
+const repeatWords = (r) => (r ? REPEATS[r].label.toLowerCase() : 'no repeat');
+
 const estimateWords = (m) => {
   if (!m) return 'no estimate';
   const s = sizeOf(m);
@@ -172,13 +183,14 @@ function plan(a, source = 'chat') {
       const startAt = start(a.start);
       if (startAt && dueAt) checkSpan(startAt, dueAt);
       const est = estimate(a.estimate);
+      const rep = repeat(a.repeat);
       const subtasks = Array.isArray(a.subtasks) ? a.subtasks.map((s) => text(s, 'subtask', { required: true, max: 500 })).slice(0, 30) : [];
       const tags = tagNames(a.tags);
-      const extras = [p && p !== 'none' && `${p} priority`, est && `~${formatEstimate(est)}`, startAt && `starts ${dayLabel(startAt)}`, dueLabel, subtasks.length && `${subtasks.length} subtask${subtasks.length === 1 ? '' : 's'}`, tags.length && tagWords(tags)].filter(Boolean);
+      const extras = [p && p !== 'none' && `${p} priority`, est && `~${formatEstimate(est)}`, startAt && `starts ${dayLabel(startAt)}`, dueLabel, rep && repeatWords(rep), subtasks.length && `${subtasks.length} subtask${subtasks.length === 1 ? '' : 's'}`, tags.length && tagWords(tags)].filter(Boolean);
       return {
         verb: 'Create',
         summary: `“${title}” in ${project.icon} ${project.name} › ${column.name}${extras.length ? ` · ${extras.join(' · ')}` : ''}`,
-        run: () => store.createTask({ projectId: project.id, columnId: column.id, title, description, note, priority: p, startAt: startAt || undefined, dueAt: dueAt || undefined, estimateMinutes: est ?? undefined, subtasks, tags }),
+        run: () => store.createTask({ projectId: project.id, columnId: column.id, title, description, note, priority: p, startAt: startAt || undefined, dueAt: dueAt || undefined, estimateMinutes: est ?? undefined, repeat: rep || undefined, subtasks, tags }),
       };
     }
 
@@ -212,6 +224,10 @@ function plan(a, source = 'chat') {
         const v = estimate(a.estimate);
         if ((v ?? null) !== t.estimateMinutes) (patch.estimateMinutes = v), changes.push(`estimate → ${estimateWords(v)}`);
       }
+      if (a.repeat !== undefined) {
+        const r = repeat(a.repeat);
+        if ((r || null) !== t.repeat) (patch.repeat = r), changes.push(r ? `repeat ${repeatWords(r)}` : 'stop repeating');
+      }
       if (a.start !== undefined) {
         const s = start(a.start);
         if ((s || null) !== t.startAt) (patch.startAt = s || ''), changes.push(s ? `starts ${dayLabel(s)}` : 'remove start date');
@@ -231,10 +247,16 @@ function plan(a, source = 'chat') {
     case 'move_task': {
       const t = taskRef(a.task);
       const from = columnOf(t);
-      const to = resolveColumnIn(a.column, from.projectId);
+      const project = a.project != null && a.project !== '' ? resolveProjectRef(a.project) : null;
+      if (project?.archived) fail(`${project.name} is archived. Restore it first.`);
+      if (!project && (a.column == null || a.column === '')) fail('It didn’t say which column or project to move to.');
+      const intoProject = project ?? store.getProject(from.projectId);
+      const to = a.column != null && a.column !== '' ? resolveColumnIn(a.column, intoProject.id) : store.columnForMove(t, intoProject.id);
       if (to.id === from.id) fail(`${label(t)} is already in ${to.name}.`);
       const top = a.position === 'top';
-      return { verb: 'Move', summary: `${label(t)}: ${from.name} → ${to.name}${top ? ' (top)' : ''}`, run: () => store.moveTask(t.id, { columnId: to.id, index: top ? 0 : undefined }) };
+      // another project: say where it's going, not just the column
+      const dest = to.projectId !== from.projectId ? `${intoProject.name} · ${to.name}` : to.name;
+      return { verb: 'Move', summary: `${label(t)}: ${from.name} → ${dest}${top ? ' (top)' : ''}`, run: () => store.moveTask(t.id, { columnId: to.id, index: top ? 0 : undefined }) };
     }
 
     case 'complete_task': {
@@ -417,6 +439,7 @@ const FIELD_NAMES = {
   due: 'deadline',
   start: 'start date',
   estimate: 'estimate',
+  repeat: 'repeat',
   rate: 'hourly rate',
   tags: 'tags',
   column: 'status',
@@ -456,6 +479,7 @@ function basisOf(a) {
         if (a.due !== undefined) b.due = t.dueAt;
         if (a.start !== undefined) b.start = t.startAt;
         if (a.estimate !== undefined) b.estimate = t.estimateMinutes;
+        if (a.repeat !== undefined) b.repeat = t.repeat;
         if (a.tags !== undefined || a.add_tags !== undefined || a.remove_tags !== undefined) b.tags = t.tags.join('\u0000');
         return b;
       }

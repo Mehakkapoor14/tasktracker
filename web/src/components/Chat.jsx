@@ -125,8 +125,12 @@ export const useChat = create((set, get) => ({
   },
 
   /** Tap the mic: listen for one message and send it. Tap again to stop. */
-  async toggleListening() {
-    if (get().listening) return get().stopVoice();
+  toggleListening() {
+    return get().listening ? get().stopVoice() : get().startListening();
+  },
+
+  /** Listen for one message and send it; stopVoice() ends it early and sends what was heard. */
+  async startListening() {
     get().stopVoice();
     const ctl = new AbortController();
     set({ listening: true, interim: '', level: 0, voiceCtl: ctl });
@@ -536,6 +540,50 @@ function ReadAloudToggle() {
 
 const voiceInput = canRecord || hasBrowserListening;
 
+/**
+ * Push-to-talk: hold Space to speak, let go to send. Only when nothing is typed and no
+ * button or field has focus, so Space still types and presses buttons; a quick tap does nothing.
+ */
+function usePushToTalk(disabled) {
+  useEffect(() => {
+    if (!voiceInput || disabled) return;
+    let timer = null;
+    let held = false;
+    const free = (el) => (el instanceof HTMLTextAreaElement ? !el.value : !el.closest?.('input, textarea, select, button, a, [contenteditable], [role=radio], [role=menuitem]'));
+    const release = () => {
+      clearTimeout(timer);
+      timer = null;
+      if (held) (held = false), useChat.getState().stopVoice();
+    };
+    const down = (e) => {
+      if (e.code !== 'Space' || e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
+      if (!timer && !held && !free(e.target)) return;
+      e.preventDefault();
+      if (e.repeat || timer || held) return;
+      timer = setTimeout(() => {
+        timer = null;
+        held = true;
+        // a mic already open (hands-free) just keeps going until Space is let go
+        if (!useChat.getState().listening) useChat.getState().startListening();
+      }, 200);
+    };
+    const up = (e) => {
+      if (e.code !== 'Space' || (!timer && !held)) return;
+      e.preventDefault();
+      release();
+    };
+    window.addEventListener('keydown', down);
+    window.addEventListener('keyup', up);
+    window.addEventListener('blur', release); // the keyup never arrives if focus leaves mid-hold
+    return () => {
+      window.removeEventListener('keydown', down);
+      window.removeEventListener('keyup', up);
+      window.removeEventListener('blur', release);
+      clearTimeout(timer);
+    };
+  }, [disabled]);
+}
+
 /** Mic button: tap to speak, tap again to stop. The ring follows your voice level. */
 function MicButton({ disabled }) {
   const listening = useChat((s) => s.listening);
@@ -543,7 +591,7 @@ function MicButton({ disabled }) {
   if (!voiceInput) return null;
   return (
     <IconButton
-      label={listening ? 'Stop listening' : 'Speak (voice)'}
+      label={listening ? 'Stop listening' : 'Speak (or hold Space)'}
       aria-pressed={listening}
       disabled={disabled}
       onClick={() => useChat.getState().toggleListening()}
@@ -560,6 +608,7 @@ function Composer({ streaming }) {
   const ref = useRef(null);
   const listening = useChat((s) => s.listening);
   const interim = useChat((s) => s.interim);
+  usePushToTalk(streaming);
 
   useEffect(() => {
     ref.current?.focus();
@@ -587,7 +636,7 @@ function Composer({ streaming }) {
               submit();
             }
           }}
-          placeholder={listening ? 'Listening… speak now' : voiceInput ? 'Ask about your tasks, or tap the mic…' : 'Ask about your tasks…'}
+          placeholder={listening ? 'Listening… speak now' : voiceInput ? 'Ask about your tasks, or hold Space to talk…' : 'Ask about your tasks…'}
           aria-label="Message"
           className="max-h-40 min-h-[28px] flex-1 resize-none bg-transparent py-1 text-[13.5px] text-fg outline-none [field-sizing:content] placeholder:text-faint"
         />

@@ -51,6 +51,9 @@ function ago(iso) {
 
 const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
+// most urgent first; projects without a priority go last
+const PRIORITY_RANK = { urgent: 0, high: 1, medium: 2, low: 3, none: 4 };
+
 function openTask(projectId, taskId) {
   useBoard.setState({ pendingSelect: taskId });
   navigate(projectPath(projectId));
@@ -67,6 +70,8 @@ export default function Home() {
   const [manageTags, setManageTags] = useState(false);
   const homeTagFilter = useBoard((s) => s.homeTagFilter);
   const homeView = useBoard((s) => s.homeView);
+  const homeSort = useBoard((s) => s.homeSort);
+  const byPriority = homeSort === 'priority';
   const tagColor = useTagColor();
 
   const active = useMemo(() => projects.filter((p) => !p.archived), [projects]);
@@ -76,10 +81,11 @@ export default function Home() {
     for (const p of active) for (const t of p.tags || []) counts.set(t, (counts.get(t) || 0) + 1);
     return [...counts].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([name]) => name);
   }, [active]);
-  const shownProjects = useMemo(
-    () => (homeTagFilter.length ? active.filter((p) => (p.tags || []).some((t) => homeTagFilter.includes(t.toLowerCase()))) : active),
-    [active, homeTagFilter]
-  );
+  const shownProjects = useMemo(() => {
+    const shown = homeTagFilter.length ? active.filter((p) => (p.tags || []).some((t) => homeTagFilter.includes(t.toLowerCase()))) : active;
+    // sort is stable, so equal priorities keep their custom order
+    return byPriority ? shown.toSorted((a, b) => PRIORITY_RANK[a.priority] - PRIORITY_RANK[b.priority]) : shown;
+  }, [active, homeTagFilter, byPriority]);
   const archived = useMemo(() => projects.filter((p) => p.archived), [projects]);
   const totals = useMemo(
     () =>
@@ -185,23 +191,24 @@ export default function Home() {
             title="Projects"
             hint={loaded ? (homeTagFilter.length ? `${shownProjects.length} of ${plural(active.length, 'active project')}` : plural(active.length, 'active project')) : ''}
           >
-            <div className="inline-flex h-7 items-center self-center rounded-lg border border-line bg-card/70 p-0.5 text-[12px]" role="radiogroup" aria-label="Show projects as">
-              {[
+            <Segmented
+              label="Show projects as"
+              value={homeView}
+              onChange={(v) => useBoard.getState().setHomeView(v)}
+              options={[
                 ['cards', 'Cards', LayoutGrid],
                 ['timeline', 'Timeline', GanttChart],
-              ].map(([key, label, Icon]) => (
-                <button
-                  key={key}
-                  type="button"
-                  role="radio"
-                  aria-checked={homeView === key}
-                  onClick={() => useBoard.getState().setHomeView(key)}
-                  className={cx('inline-flex h-full items-center gap-1.5 rounded-md px-2 transition-colors', homeView === key ? 'bg-accent-soft font-medium text-fg' : 'text-muted hover:text-fg')}
-                >
-                  <Icon className="size-3.5" /> {label}
-                </button>
-              ))}
-            </div>
+              ]}
+            />
+            <Segmented
+              label="Sort projects by"
+              value={homeSort}
+              onChange={(v) => useBoard.getState().setHomeSort(v)}
+              options={[
+                ['custom', 'Custom', GripHorizontal],
+                ['priority', 'Priority', Flag],
+              ]}
+            />
             {projectTags.length > 0 && (
               <div className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-1.5" aria-label="Filter projects by tag">
                 {projectTags.map((name) => (
@@ -226,18 +233,23 @@ export default function Home() {
             <SortableContext items={shownProjects.map((p) => p.id)} strategy={rectSortingStrategy}>
               <div className="grid gap-4 [grid-template-columns:repeat(auto-fill,minmax(330px,1fr))]">
                 {!loaded && [0, 1, 2].map((i) => <div key={i} className="h-[270px] animate-pulse rounded-2xl bg-card/60" />)}
-                {shownProjects.map((p) => (
-                  <SortableProjectCard
-                    key={p.id}
-                    project={p}
-                    isFirst={active[0]?.id === p.id}
-                    isLast={active.at(-1)?.id === p.id}
-                    onEdit={() => setEditing(p)}
-                    onDelete={() => setDeleting(p)}
-                    canArchive={active.length > 1}
-                    justDragged={() => Date.now() - draggedAt.current < 250}
-                  />
-                ))}
+                {/* sorted by priority the order isn't yours to change, so no dragging or moving */}
+                {shownProjects.map((p) =>
+                  byPriority ? (
+                    <ProjectCard key={p.id} project={p} canMove={false} onEdit={() => setEditing(p)} onDelete={() => setDeleting(p)} canArchive={active.length > 1} />
+                  ) : (
+                    <SortableProjectCard
+                      key={p.id}
+                      project={p}
+                      isFirst={active[0]?.id === p.id}
+                      isLast={active.at(-1)?.id === p.id}
+                      onEdit={() => setEditing(p)}
+                      onDelete={() => setDeleting(p)}
+                      canArchive={active.length > 1}
+                      justDragged={() => Date.now() - draggedAt.current < 250}
+                    />
+                  )
+                )}
                 {loaded && <NewProjectCard onClick={() => setNewOpen(true)} />}
               </div>
             </SortableContext>
@@ -275,6 +287,26 @@ function ProjectPriority({ priority }) {
     <span title={`${PRIORITY[priority].label} priority`} className="inline-flex h-5 shrink-0 items-center gap-1 rounded-md bg-hover px-1.5 text-[11px] font-medium text-muted">
       <PriorityIcon priority={priority} /> {PRIORITY[priority].label}
     </span>
+  );
+}
+
+/** A small pill of mutually exclusive choices; options are [value, label, Icon]. */
+function Segmented({ label, value, onChange, options }) {
+  return (
+    <div className="inline-flex h-7 items-center self-center rounded-lg border border-line bg-card/70 p-0.5 text-[12px]" role="radiogroup" aria-label={label}>
+      {options.map(([key, text, Icon]) => (
+        <button
+          key={key}
+          type="button"
+          role="radio"
+          aria-checked={value === key}
+          onClick={() => onChange(key)}
+          className={cx('inline-flex h-full items-center gap-1.5 rounded-md px-2 transition-colors', value === key ? 'bg-accent-soft font-medium text-fg' : 'text-muted hover:text-fg')}
+        >
+          <Icon className="size-3.5" /> {text}
+        </button>
+      ))}
+    </div>
   );
 }
 
@@ -343,7 +375,7 @@ function SortableProjectCard({ justDragged, ...props }) {
   );
 }
 
-function ProjectCard({ project: p, isFirst, isLast, onEdit, onDelete, canArchive = true, sortable, onOpen }) {
+function ProjectCard({ project: p, isFirst, isLast, onEdit, onDelete, canArchive = true, canMove = true, sortable, onOpen }) {
   const { updateProject, shiftProject } = useBoard.getState();
   const homeTagFilter = useBoard((s) => s.homeTagFilter);
   const s = p.stats;
@@ -423,7 +455,7 @@ function ProjectCard({ project: p, isFirst, isLast, onEdit, onDelete, canArchive
                   ))}
                 </MenuSubContent>
               </MenuSub>
-              {!p.archived && (
+              {!p.archived && canMove && (
                 <>
                   <MenuItem disabled={isFirst} onSelect={() => shiftProject(p.id, -1)}>
                     <ArrowLeft /> Move earlier

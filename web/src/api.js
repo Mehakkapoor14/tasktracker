@@ -24,6 +24,7 @@ export const api = {
   createTask: (body) => request('POST', '/api/tasks', body),
   updateTask: (id, patch) => request('PATCH', `/api/tasks/${id}`, patch),
   moveTask: (id, columnId, index) => request('POST', `/api/tasks/${id}/move`, { columnId, index }),
+  moveTaskToProject: (id, projectId) => request('POST', `/api/tasks/${id}/move`, { projectId }),
   deleteTask: (id) => request('DELETE', `/api/tasks/${id}`),
   startTimer: (id) => request('POST', `/api/tasks/${id}/timer/start`),
   stopTimer: (id) => request('POST', `/api/tasks/${id}/timer/stop`),

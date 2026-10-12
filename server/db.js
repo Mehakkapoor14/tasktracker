@@ -7,6 +7,7 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { tagColor } from '../shared/tags.js';
 import { MAX_ESTIMATE } from '../shared/estimate.js';
+import { nextDates, parseRepeat, REPEATS } from '../shared/repeat.js';
 
 // Lives outside the project so the web app and MCP server always share one DB,
 // and so cloud-synced folders (iCloud/Dropbox) never touch a live SQLite file.
@@ -244,6 +245,16 @@ function migrate() {
       db.exec('PRAGMA user_version = 8');
     });
   }
+  if (user_version < 9) {
+    // v9: repeating tasks — finishing one adds the next with its dates moved on (repeat_of links them)
+    tx(() => {
+      db.exec(`
+        ALTER TABLE tasks ADD COLUMN repeat TEXT;
+        ALTER TABLE tasks ADD COLUMN repeat_of INTEGER;
+      `);
+      db.exec('PRAGMA user_version = 9');
+    });
+  }
 }
 
 const DEFAULT_COLUMNS = [
@@ -314,6 +325,7 @@ function mapTask(r, subtasks = [], tags = [], claim = null) {
       priority: r.priority,
       startAt: r.start_at ?? null,
       estimateMinutes: r.estimate_minutes ?? null,
+      repeat: r.repeat ?? null,
       dueAt: r.due_at,
       dueHasTime: !!r.due_has_time,
       timeSpent: r.time_spent,
@@ -378,6 +390,13 @@ function cleanEstimate(v) {
   if (!Number.isFinite(n) || n < 0) throw new AppError(400, 'An estimate must be a number of minutes');
   if (n > MAX_ESTIMATE) throw new AppError(400, 'That estimate is too large (the limit is 60 working days)');
   return n || null;
+}
+
+/** A REPEATS key, or null for no repeat. */
+function cleanRepeat(v) {
+  const r = parseRepeat(v);
+  if (r == null) throw new AppError(400, `repeat must be one of ${Object.keys(REPEATS).join(', ')} (or "" for none)`);
+  return r || null;
 }
 
 function cleanRate(v) {
@@ -612,7 +631,7 @@ function defaultColumnId(projectId = defaultProjectId()) {
   return c.id;
 }
 
-export function createTask({ title, description, note, projectId, columnId, priority = 'none', startAt, dueAt, estimateMinutes, subtasks = [], tags = [], placement = 'bottom' } = {}) {
+export function createTask({ title, description, note, projectId, columnId, priority = 'none', startAt, dueAt, estimateMinutes, repeat, subtasks = [], tags = [], placement = 'bottom' } = {}) {
   return tx(() => {
     const colId = columnId != null ? getColumn(columnId).id : defaultColumnId(projectId != null ? getProject(projectId).id : defaultProjectId());
     if (!PRIORITIES.includes(priority)) throw new AppError(400, `priority must be one of ${PRIORITIES.join(', ')}`);
@@ -625,7 +644,7 @@ export function createTask({ title, description, note, projectId, columnId, prio
         : q('SELECT COALESCE(MAX(position), 0) + 1024 AS p FROM tasks WHERE column_id = ? AND archived = 0').get(colId).p;
     const isDone = getColumn(colId).isDone;
     const id = Number(
-      q('INSERT INTO tasks (column_id, title, description, note, priority, start_at, due_at, due_has_time, estimate_minutes, position, completed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(
+      q('INSERT INTO tasks (column_id, title, description, note, priority, start_at, due_at, due_has_time, estimate_minutes, repeat, position, completed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(
         colId,
         cleanText(title, 'title', { max: 500, required: true }),
         cleanText(description, 'description'),
@@ -635,6 +654,7 @@ export function createTask({ title, description, note, projectId, columnId, prio
         due,
         dueHasTime,
         cleanEstimate(estimateMinutes),
+        cleanRepeat(repeat),
         edge,
         isDone ? now() : null
       ).lastInsertRowid
@@ -663,6 +683,7 @@ export function updateTask(id, patch = {}) {
     }
     if (patch.startAt !== undefined) sets.push('start_at = ?'), vals.push(parseStart(patch.startAt));
     if (patch.estimateMinutes !== undefined) sets.push('estimate_minutes = ?'), vals.push(cleanEstimate(patch.estimateMinutes));
+    if (patch.repeat !== undefined) sets.push('repeat = ?'), vals.push(cleanRepeat(patch.repeat));
     if (patch.startAt !== undefined || patch.dueAt !== undefined) {
       checkSpan(patch.startAt !== undefined ? parseStart(patch.startAt) : task.startAt, patch.dueAt !== undefined ? parseDue(patch.dueAt)[0] : task.dueAt);
     }
@@ -691,11 +712,25 @@ export function updateTask(id, patch = {}) {
   });
 }
 
-/** Move a task to a column at `index` (0-based among active tasks; defaults to the end). */
-export function moveTask(id, { columnId, index } = {}) {
+/**
+ * Where a task lands when it moves to another project: the column with the same name,
+ * else the first visible column of the same kind (done or not), else the first column.
+ */
+export function columnForMove(task, projectId) {
+  const from = getColumn(task.columnId);
+  const cols = listColumns(getProject(projectId).id);
+  if (!cols.length) throw new AppError(400, 'That project has no columns to move the task into.');
+  return cols.find((c) => norm(c.name) === norm(from.name)) || cols.find((c) => !c.hidden && c.isDone === from.isDone) || cols[0];
+}
+
+/**
+ * Move a task to a column at `index` (0-based among active tasks; defaults to the end).
+ * With `projectId` and no `columnId` it moves to that project, keeping its status if it can.
+ */
+export function moveTask(id, { columnId, projectId, index } = {}) {
   return tx(() => {
     const task = getTask(id);
-    const col = columnId != null ? getColumn(columnId) : getColumn(task.columnId);
+    const col = columnId != null ? getColumn(columnId) : projectId != null ? columnForMove(task, projectId) : getColumn(task.columnId);
     const siblings = q('SELECT id, position FROM tasks WHERE column_id = ? AND archived = 0 AND id != ? ORDER BY position').all(col.id, task.id);
     const i = index == null ? siblings.length : Math.max(0, Math.min(Number(index), siblings.length));
     const before = siblings[i - 1]?.position;
@@ -722,8 +757,41 @@ export function moveTask(id, { columnId, index } = {}) {
     q(`UPDATE tasks SET column_id = ?, position = ?, completed_at = ?, updated_at = ?${timer} WHERE id = ?`).run(col.id, pos, completedAt, now(), task.id);
     // finished work needs no "working on it" marker
     if (col.isDone) q('DELETE FROM claims WHERE task_id = ?').run(task.id);
+    const wasDone = getColumn(task.columnId).isDone;
+    if (col.isDone && !wasDone && task.repeat) repeatTask(task, col.projectId);
+    if (!col.isDone && wasDone) unrepeatTask(task.id);
     return getTask(task.id);
   });
+}
+
+/**
+ * A repeating task was just finished: add the next one to the project's first open column,
+ * with fresh subtasks and its dates moved on. The repeat moves with it, so finishing this
+ * one again (after reopening it) doesn't add a second copy.
+ */
+function repeatTask(task, projectId) {
+  q('UPDATE tasks SET repeat = NULL WHERE id = ?').run(task.id);
+  const next = createTask({
+    columnId: defaultColumnId(projectId),
+    title: task.title,
+    description: task.description,
+    priority: task.priority,
+    estimateMinutes: task.estimateMinutes,
+    repeat: task.repeat,
+    subtasks: task.subtasks.map((s) => s.title),
+    tags: task.tags,
+    ...nextDates(task, task.repeat),
+  });
+  q('UPDATE tasks SET repeat_of = ? WHERE id = ?').run(task.id, next.id);
+  return next;
+}
+
+/** Reopening a finished task (or undoing it) takes back the next one, as long as nobody has touched it. */
+function unrepeatTask(id) {
+  const next = q('SELECT id, repeat FROM tasks WHERE repeat_of = ? AND archived = 0 AND updated_at = created_at').get(id);
+  if (!next) return;
+  q('DELETE FROM tasks WHERE id = ?').run(next.id);
+  q('UPDATE tasks SET repeat = ? WHERE id = ?').run(next.repeat, id);
 }
 
 /** Move to the first done-flagged column. */
