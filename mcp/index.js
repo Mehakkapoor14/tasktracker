@@ -116,6 +116,7 @@ function taskLine(t) {
   if (t.subtasks.length) parts.push(`{${t.subtasks.filter((s) => s.done).length}/${t.subtasks.length} subtasks}`);
   if (t.tags?.length) parts.push(t.tags.map((g) => `#${g}`).join(' '));
   if (t.estimateMinutes) parts.push(`~${formatEstimate(t.estimateMinutes)}`);
+  if (t.repeat) parts.push(`↻ ${t.repeat}`);
   if (t.timerStartedAt) parts.push('⏱ running');
   if (t.claim) parts.push(`(🤖 ${t.claim.agent} is working on it)`);
   if (t.archived) parts.push('(archived)');
@@ -133,6 +134,7 @@ function taskDetail(t) {
     `tags: ${t.tags?.length ? t.tags.join(', ') : 'none'}`,
     `start: ${t.startAt || 'none'}`,
     `estimate: ${t.estimateMinutes ? formatEstimate(t.estimateMinutes) : 'none'}`,
+    `repeats: ${t.repeat || 'no'}`,
     `due: ${due ? `${t.dueAt} — ${due.label}` : 'none'}`,
     `time spent: ${formatDuration(t.timeSpent + running)}${t.timerStartedAt ? ' (timer running)' : ''}`,
     `working on it: ${t.claim ? `${t.claim.agent} since ${t.claim.claimedAt}${t.claim.note ? ` (“${t.claim.note}”)` : ''}` : 'nobody'}`,
@@ -163,6 +165,9 @@ const projectRef = z.union([z.string(), z.number()]).describe('Project name (fuz
 const priority = z.enum(['none', 'low', 'medium', 'high', 'urgent']);
 const due = z.string().describe('Deadline as YYYY-MM-DD (whole day) or an ISO datetime, e.g. 2026-10-05T17:00');
 const start = z.string().describe('Start date as YYYY-MM-DD (shows the task as a span on the timeline); empty string clears it');
+const repeatArg = z
+  .string()
+  .describe('Repeat: daily, weekdays, weekly, biweekly, monthly or yearly. Finishing the task adds the next one with its dates moved on. Empty string stops repeating.');
 const estimateArg = z.string().describe('Estimate: a size XS (30m), S (1h), M (4h), L (1d = 8h), XL (3d), or an amount like "2h", "90m", "1d 4h". Empty string clears it.');
 const toMinutes = (v) => (v === undefined ? undefined : parseEstimate(v));
 const tagList = z.array(z.string().min(1)).describe('Tag names, e.g. ["design", "q4"]. New tags are created automatically.');
@@ -261,10 +266,11 @@ server.registerTool(
       tags: tagList.optional(),
       start: start.optional(),
       estimate: estimateArg.optional(),
+      repeat: repeatArg.optional(),
     },
   },
-  tool(({ title, project, description, note, column, priority, due, start, estimate, subtasks, tags }) =>
-    write([{ type: 'create_task', title, project, description, note, column, priority, due, start, estimate, subtasks, tags }], () => {
+  tool(({ title, project, description, note, column, priority, due, start, estimate, repeat, subtasks, tags }) =>
+    write([{ type: 'create_task', title, project, description, note, column, priority, due, start, estimate, repeat, subtasks, tags }], () => {
       const projectId = store.resolveProject(project).id;
       const t = store.createTask({
         projectId,
@@ -275,6 +281,7 @@ server.registerTool(
         dueAt: due,
         startAt: start,
         estimateMinutes: toMinutes(estimate) ?? undefined,
+        repeat,
         subtasks,
         tags,
         columnId: column != null ? store.resolveColumn(column, projectId).id : undefined,
@@ -299,6 +306,7 @@ server.registerTool(
       due: z.string().optional().describe('YYYY-MM-DD or ISO datetime; empty string clears it'),
       start: start.optional(),
       estimate: estimateArg.optional(),
+      repeat: repeatArg.optional(),
       tags: tagList.optional().describe('Replaces all tags ([] removes them)'),
       add_tags: tagList.optional(),
       remove_tags: z.array(z.string()).optional(),
@@ -317,18 +325,24 @@ server.registerTool(
   'move_task',
   {
     title: 'Move task',
-    description: 'Move a task to another column of its project (e.g. "In Progress", "Follow-up").',
+    description:
+      'Move a task to another column (e.g. "In Progress", "Follow-up"), or to another project with `project`. Moving to a project without a column keeps the same-named column when it exists.',
     inputSchema: {
       id: taskId,
-      column: columnRef,
+      column: columnRef.optional().describe('Column name or id; required unless project is given'),
+      project: projectRef.optional().describe('Move to this project (name or id). Omit to stay in the current project.'),
       position: z.enum(['top', 'bottom']).optional().describe('Where in the column (default bottom)'),
     },
   },
-  tool(({ id, column, position }) =>
-    write([{ type: 'move_task', task: id, column, position }], () => {
-      const col = store.resolveColumn(column, store.getColumn(store.getTask(id).columnId).projectId);
+  tool(({ id, column, project, position }) =>
+    write([{ type: 'move_task', task: id, column, project, position }], () => {
+      if (column == null && project == null) throw new Error('Say which column or project to move to.');
+      const task = store.getTask(id);
+      const projectId = project != null ? store.resolveProject(project).id : store.getColumn(task.columnId).projectId;
+      const col = column != null ? store.resolveColumn(column, projectId) : store.columnForMove(task, projectId);
       const t = store.moveTask(id, { columnId: col.id, index: position === 'top' ? 0 : undefined });
-      return text(`Moved #${t.id} "${t.title}" to ${col.name}.`);
+      const where = col.projectId !== store.getColumn(task.columnId).projectId ? `${store.getProject(col.projectId).name} · ${col.name}` : col.name;
+      return text(`Moved #${t.id} "${t.title}" to ${where}.`);
     })
   )
 );
@@ -343,8 +357,10 @@ server.registerTool(
   tool(({ id, note }) =>
     write([...(note ? [{ type: 'add_note', task: id, text: note }] : []), { type: 'complete_task', task: id }], () => {
       if (note) store.appendNote(id, note);
+      const before = store.getTask(id);
+      const repeat = !isDoneColumn(before.columnId) && before.repeat;
       const t = store.completeTask(id);
-      return text(`Completed #${t.id} "${t.title}" → ${columnName(t.columnId)}.`);
+      return text(`Completed #${t.id} "${t.title}" → ${columnName(t.columnId)}.${repeat ? ` It repeats ${repeat}, so the next one was added.` : ''}`);
     })
   )
 );

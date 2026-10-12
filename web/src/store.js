@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { toast } from 'sonner';
 import { api } from './api';
 import { syncThemeColor } from './pwa';
+import { REPEATS } from '../../shared/repeat.js';
 
 const sortByPos = (a, b) => a.position - b.position;
 const replaceTask = (tasks, task) => tasks.map((t) => (t.id === task.id ? task : t));
@@ -50,6 +51,7 @@ export const useBoard = create((set, get) => {
     // how a project is shown ('board' | 'timeline') and how the home page lists projects ('cards' | 'timeline')
     view: localStorage.getItem('tt-view') === 'timeline' ? 'timeline' : 'board',
     homeView: localStorage.getItem('tt-home-view') === 'timeline' ? 'timeline' : 'cards',
+    homeSort: localStorage.getItem('tt-home-sort') === 'priority' ? 'priority' : 'custom',
     selectedId: null,
     dragging: false,
     quickAddColumn: null,
@@ -175,6 +177,10 @@ export const useBoard = create((set, get) => {
       localStorage.setItem('tt-home-view', homeView);
       set({ homeView });
     },
+    setHomeSort(homeSort) {
+      localStorage.setItem('tt-home-sort', homeSort);
+      set({ homeSort });
+    },
     /** Add or remove a tag from the board filter (or the home page's, with `home`). */
     toggleTagFilter(name, home = false) {
       const key = home ? 'homeTagFilter' : 'tagFilter';
@@ -249,13 +255,30 @@ export const useBoard = create((set, get) => {
       const from = task.columnId;
       const fromIndex = tasksForColumn(s.tasks, from).findIndex((t) => t.id === id);
       await get().moveTask(id, doneCol.id, 0);
-      toast.success(`Done — ${task.title}`, { action: { label: 'Undo', onClick: () => get().moveTask(id, from, fromIndex) } });
+      toast.success(`Done — ${task.title}`, {
+        description: task.repeat && !s.columns.find((c) => c.id === from)?.isDone ? `It repeats ${REPEATS[task.repeat].label.toLowerCase()}, so the next one is on the board.` : undefined,
+        action: { label: 'Undo', onClick: () => get().moveTask(id, from, fromIndex) },
+      });
     },
 
     async archiveTask(id) {
       const task = get().tasks.find((t) => t.id === id);
       await optimistic((s) => ({ tasks: s.tasks.filter((t) => t.id !== id), selectedId: s.selectedId === id ? null : s.selectedId }), () => api.updateTask(id, { archived: true }));
       toast(`Archived “${task?.title ?? 'task'}”`, { action: { label: 'Undo', onClick: () => get().restoreTask(id) } });
+    },
+
+    /** Send a task to another project (same-named column when there is one). It leaves this board. */
+    async moveTaskToProject(id, projectId) {
+      const s = get();
+      const task = s.tasks.find((t) => t.id === id);
+      const from = task?.columnId;
+      const fromIndex = tasksForColumn(s.tasks, from).findIndex((t) => t.id === id);
+      const target = s.projects.find((p) => p.id === projectId);
+      const moved = await optimistic((s) => ({ tasks: s.tasks.filter((t) => t.id !== id), selectedId: s.selectedId === id ? null : s.selectedId }), () => api.moveTaskToProject(id, projectId));
+      get().loadHome();
+      toast.success(`Moved “${moved.title}” to ${target?.name ?? 'another project'}`, {
+        action: { label: 'Undo', onClick: () => get().moveTask(id, from, fromIndex) },
+      });
     },
 
     restoreTask(id) {
@@ -291,6 +314,22 @@ export const useBoard = create((set, get) => {
       return optimistic(
         (s) => ({ tasks: s.tasks.map((t) => (t.id === taskId ? { ...t, subtasks: t.subtasks.map((x) => (x.id === id ? { ...x, ...patch } : x)) } : t)) }),
         () => api.updateSubtask(id, patch)
+      );
+    },
+
+    /** Drag a subtask to `index` in its task's list. */
+    reorderSubtask(taskId, id, index) {
+      if (typeof id === 'string') return;
+      return optimistic(
+        (s) => ({
+          tasks: s.tasks.map((t) => {
+            if (t.id !== taskId) return t;
+            const subtasks = t.subtasks.filter((x) => x.id !== id);
+            subtasks.splice(index, 0, t.subtasks.find((x) => x.id === id));
+            return { ...t, subtasks };
+          }),
+        }),
+        () => api.updateSubtask(id, { index })
       );
     },
 

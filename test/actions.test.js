@@ -137,3 +137,13 @@ test('start dates can be proposed and are checked against the deadline', () => {
   actions.apply([{ type: 'update_task', task: t.id, start: '2030-03-04' }]);
   assert.equal(store.getTask(t.id).startAt, '2030-03-04');
 });
+
+test('move_task can send a task to another project', () => {
+  const t = store.createTask({ projectId: pid, title: 'Plant tomatoes' });
+  const garden = store.createProject({ name: 'Vegetables' });
+  const [item] = actions.preview([{ type: 'move_task', task: t.id, project: 'vegetables' }]);
+  assert.equal(item.summary, `#${t.id} Plant tomatoes: Open → Vegetables · Open`);
+  actions.apply([{ type: 'move_task', task: t.id, project: 'vegetables' }]);
+  assert.equal(store.getColumn(store.getTask(t.id).columnId).projectId, garden.id);
+  assert.match(actions.preview([{ type: 'move_task', task: t.id }])[0].summary, /which column or project/);
+});

@@ -8,6 +8,11 @@
 - 🤝 **When two agents touch the same card:** agents can mark a card as being worked on (`claim_task` / `release_task`). Claims are leases, not locks: they expire after 30 minutes without activity, clear when the agent disconnects or the card is done, and you can release one anytime.
 - ⚠️ **No stale overwrites:** requests remember the values they'd replace; changes made since the agent asked are flagged and start unticked.
 - Side panels now close with a single Esc (the close button's tooltip no longer pops up on open).
+- 🔁 **Repeating tasks:** every day, weekday, week, 2 weeks, month or year. Finishing one adds the next with its deadline (and start) moved on, never already overdue, with fresh subtasks. Undo takes the new one back. Agents and chat can set `repeat` too.
+- 📦 **Move tasks between projects** from the task panel's ⋯ menu; the task keeps its status when the other project has a column with the same name. Agents and chat can pass `project` to `move_task`.
+- ↕️ **Sort the home page by priority** (urgent first), or keep your own drag order.
+- Drag subtasks by their grip to reorder them.
+- 🎙️ **Push-to-talk:** in chat, hold Space to speak and let go to send.
 
 ## v1.0.0 · 2026-10-04
 

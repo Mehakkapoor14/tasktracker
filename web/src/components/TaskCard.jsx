@@ -1,13 +1,14 @@
 import { memo } from 'react';
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { Archive, Check, GripVertical, ListChecks, StickyNote, Timer, AlignLeft } from 'lucide-react';
+import { Archive, Check, GripVertical, ListChecks, Repeat, StickyNote, Timer, AlignLeft } from 'lucide-react';
 import { useBoard } from '../store';
 import { DueChip } from './Due';
 import { TagList } from './Tags';
 import { ClaimChip } from './Claim';
 import { EstimateChip } from './Estimate';
 import { cx, Tip } from './ui';
+import { REPEATS } from '../../../shared/repeat.js';
 
 export const PRIORITY = {
   none: { label: 'No priority', cls: '' },
@@ -96,11 +97,16 @@ function CardBody({ task, isDone, overlay }) {
         </div>
       )}
 
-      {(task.dueAt || total > 0 || task.priority !== 'none' || task.note || task.description || task.timerStartedAt || task.estimateMinutes) && (
+      {(task.dueAt || total > 0 || task.priority !== 'none' || task.note || task.description || task.timerStartedAt || task.estimateMinutes || task.repeat) && (
         <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 pl-6 text-[11px] text-muted">
           <PriorityIcon priority={task.priority} />
           <DueChip dueAt={task.dueAt} hasTime={task.dueHasTime} done={isDone} />
           <EstimateChip task={task} done={isDone} />
+          {task.repeat && (
+            <span className="inline-flex items-center gap-1" title={REPEATS[task.repeat]?.label}>
+              <Repeat className="size-3.5" /> {REPEATS[task.repeat]?.short}
+            </span>
+          )}
           {total > 0 && (
             <span className={cx('inline-flex items-center gap-1 tabular-nums', done === total && 'text-ok')}>
               <ListChecks className="size-3.5" />

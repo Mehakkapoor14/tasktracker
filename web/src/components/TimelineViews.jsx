@@ -111,6 +111,7 @@ export function HomeTimeline({ projectIds }) {
     if (!data) return [];
     return data.projects
       .filter((p) => projectIds.includes(p.id))
+      .sort((a, b) => projectIds.indexOf(a.id) - projectIds.indexOf(b.id)) // same order as the home page
       .map((p) => {
         const colById = new Map(p.columns.map((c) => [c.id, c]));
         const mine = data.tasks.filter((t) => colById.has(t.columnId)).sort(byStart);

@@ -197,3 +197,20 @@ test('reminder text uses the real time left', async () => {
   assert.equal(m.body, '🎨 Web · Open');
   assert.match(message({ task: { ...task, due_at: '2030-05-10', due_has_time: 0 }, kind: 'overdue' }).title, /^Overdue · Ship/);
 });
+
+test('moves a task to another project, keeping its column when the name matches', () => {
+  const t = store.createTask({ title: 'Renew passport' });
+  store.moveTask(t.id, { columnId: store.resolveColumn('In Progress').id });
+  const errands = store.createProject({ name: 'Errands' });
+  const moved = store.moveTask(t.id, { projectId: errands.id });
+  const col = store.getColumn(moved.columnId);
+  assert.equal(col.projectId, errands.id);
+  assert.equal(col.name, 'In Progress');
+
+  // no same-named column: the first visible column of the same kind
+  const odd = store.createProject({ name: 'Odd' });
+  for (const c of store.listColumns(odd.id)) if (c.name === 'In Progress') store.deleteColumn(c.id);
+  assert.equal(store.getColumn(store.moveTask(t.id, { projectId: odd.id }).columnId).name, 'Open');
+  store.completeTask(t.id);
+  assert.ok(store.moveTask(t.id, { projectId: errands.id }).completedAt, 'a done task stays done');
+});

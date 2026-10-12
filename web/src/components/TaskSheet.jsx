@@ -1,6 +1,10 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { Archive, Check, ChevronDown, GripVertical, MoreHorizontal, Pause, Play, Plus, Trash2, X } from 'lucide-react';
+import { closestCenter, DndContext, KeyboardSensor, PointerSensor, useSensor, useSensors } from '@dnd-kit/core';
+import { SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
+import { Archive, Check, ChevronDown, FolderInput, GripVertical, MoreHorizontal, Pause, Play, Plus, Repeat, Trash2, X } from 'lucide-react';
 import { formatDuration } from '../../../shared/due.js';
+import { nextDates, REPEATS } from '../../../shared/repeat.js';
 import { useBoard } from '../store';
 import { DuePicker, dueDay, StartPicker } from './Due';
 import { TagEditor } from './Tags';
@@ -8,7 +12,7 @@ import { ClaimBanner } from './Claim';
 import { EstimatePicker } from './Estimate';
 import { NoteField } from './Note';
 import { PRIORITY, PriorityIcon } from './TaskCard';
-import { Button, ColorDot, cx, IconButton, Menu, MenuContent, MenuItem, MenuSeparator, MenuTrigger, Sheet, useNow } from './ui';
+import { Button, ColorDot, cx, IconButton, Menu, MenuContent, MenuItem, MenuSeparator, MenuSub, MenuSubContent, MenuSubTrigger, MenuTrigger, Sheet, useNow } from './ui';
 
 /** Textarea that grows with its content and autosaves (debounced + on blur). */
 function AutoField({ value, onSave, className, placeholder, singleLine, autoFocus, minRows = 1 }) {
@@ -135,6 +139,39 @@ function PriorityPicker({ task }) {
   );
 }
 
+/** How often the task comes back. Finishing it adds the next one; the hint says when that will be due. */
+function RepeatPicker({ task }) {
+  const updateTask = useBoard((s) => s.updateTask);
+  const next = task.repeat && nextDates(task, task.repeat);
+  const nextDay = next && (next.dueAt || next.startAt);
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <Menu>
+        <MenuTrigger asChild>
+          <button type="button" className={cx('inline-flex h-8 items-center gap-2 rounded-lg border border-line px-2.5 text-[13px] hover:bg-hover', !task.repeat && 'text-muted')}>
+            <Repeat className="size-3.5 text-faint" />
+            {task.repeat ? REPEATS[task.repeat].label : 'Doesn’t repeat'}
+            <ChevronDown className="size-3.5 text-faint" />
+          </button>
+        </MenuTrigger>
+        <MenuContent align="start">
+          {[['', 'Doesn’t repeat'], ...Object.entries(REPEATS).map(([k, r]) => [k, r.label])].map(([key, label]) => (
+            <MenuItem key={key || 'none'} onSelect={() => (task.repeat || '') !== key && updateTask(task.id, { repeat: key || null })}>
+              <span className="flex-1">{label}</span>
+              {(task.repeat || '') === key && <Check className="!text-accent" />}
+            </MenuItem>
+          ))}
+        </MenuContent>
+      </Menu>
+      {nextDay && (
+        <span className="text-[12px] text-faint">
+          Next one {next.dueAt ? 'due' : 'starts'} {new Date(nextDay.length > 10 ? nextDay : `${nextDay}T12:00`).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })} when this is done
+        </span>
+      )}
+    </div>
+  );
+}
+
 function TimeTracker({ task }) {
   const { startTimer, stopTimer } = useBoard.getState();
   const running = !!task.timerStartedAt;
@@ -152,11 +189,64 @@ function TimeTracker({ task }) {
   );
 }
 
+/** One subtask; drag it by the grip (the title stays editable text). */
+function SubtaskRow({ task, sub: s }) {
+  const { updateSubtask, deleteSubtask } = useBoard.getState();
+  const { attributes, listeners, setNodeRef, setActivatorNodeRef, transform, transition, isDragging } = useSortable({ id: s.id, disabled: typeof s.id === 'string' });
+  return (
+    <li
+      ref={setNodeRef}
+      style={{ transform: CSS.Translate.toString(transform), transition }}
+      className={cx('group/sub relative flex items-start gap-2 rounded-lg px-2 py-1 hover:bg-hover/60', isDragging && 'z-10 bg-card shadow-lift')}
+    >
+      <button
+        type="button"
+        ref={setActivatorNodeRef}
+        {...attributes}
+        {...listeners}
+        aria-label={`Drag to reorder “${s.title}”`}
+        className="mt-1 shrink-0 cursor-grab touch-none rounded text-faint opacity-0 focus-visible:opacity-100 active:cursor-grabbing group-hover/sub:opacity-100"
+      >
+        <GripVertical className="size-3.5" />
+      </button>
+      <button
+        type="button"
+        aria-label={s.done ? 'Mark not done' : 'Mark done'}
+        onClick={() => updateSubtask(task.id, s.id, { done: !s.done })}
+        className={cx(
+          'mt-[3px] flex size-4 shrink-0 items-center justify-center rounded-[5px] border transition-colors',
+          s.done ? 'border-ok bg-ok text-card' : 'border-line-strong hover:border-ok'
+        )}
+      >
+        {s.done && <Check className="size-3" strokeWidth={3.5} />}
+      </button>
+      <AutoField
+        singleLine
+        value={s.title}
+        onSave={(title) => updateSubtask(task.id, s.id, { title })}
+        className={cx('text-[13.5px] leading-[22px]', s.done && 'text-muted line-through decoration-faint')}
+      />
+      <button
+        type="button"
+        aria-label="Delete subtask"
+        onClick={() => deleteSubtask(task.id, s.id)}
+        className="mt-0.5 rounded p-0.5 text-faint opacity-0 hover:text-danger group-hover/sub:opacity-100"
+      >
+        <X className="size-3.5" />
+      </button>
+    </li>
+  );
+}
+
 function Subtasks({ task }) {
-  const { addSubtask, updateSubtask, deleteSubtask } = useBoard.getState();
+  const { addSubtask, reorderSubtask } = useBoard.getState();
   const [draft, setDraft] = useState('');
   const done = task.subtasks.filter((s) => s.done).length;
   const total = task.subtasks.length;
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }), useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }));
+  const onDragEnd = ({ active, over }) => {
+    if (over && active.id !== over.id) reorderSubtask(task.id, active.id, task.subtasks.findIndex((s) => s.id === over.id));
+  };
 
   return (
     <Section
@@ -172,38 +262,15 @@ function Subtasks({ task }) {
         )
       }
     >
-      <ul className="-mx-2">
-        {task.subtasks.map((s) => (
-          <li key={s.id} className="group/sub flex items-start gap-2 rounded-lg px-2 py-1 hover:bg-hover/60">
-            <GripVertical className="mt-1 size-3.5 shrink-0 text-transparent" />
-            <button
-              type="button"
-              aria-label={s.done ? 'Mark not done' : 'Mark done'}
-              onClick={() => updateSubtask(task.id, s.id, { done: !s.done })}
-              className={cx(
-                'mt-[3px] flex size-4 shrink-0 items-center justify-center rounded-[5px] border transition-colors',
-                s.done ? 'border-ok bg-ok text-card' : 'border-line-strong hover:border-ok'
-              )}
-            >
-              {s.done && <Check className="size-3" strokeWidth={3.5} />}
-            </button>
-            <AutoField
-              singleLine
-              value={s.title}
-              onSave={(title) => updateSubtask(task.id, s.id, { title })}
-              className={cx('text-[13.5px] leading-[22px]', s.done && 'text-muted line-through decoration-faint')}
-            />
-            <button
-              type="button"
-              aria-label="Delete subtask"
-              onClick={() => deleteSubtask(task.id, s.id)}
-              className="mt-0.5 rounded p-0.5 text-faint opacity-0 hover:text-danger group-hover/sub:opacity-100"
-            >
-              <X className="size-3.5" />
-            </button>
-          </li>
-        ))}
-      </ul>
+      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
+        <SortableContext items={task.subtasks.map((s) => s.id)} strategy={verticalListSortingStrategy}>
+          <ul className="-mx-2">
+            {task.subtasks.map((s) => (
+              <SubtaskRow key={s.id} task={task} sub={s} />
+            ))}
+          </ul>
+        </SortableContext>
+      </DndContext>
       <div className="mt-1 flex items-center gap-2 rounded-lg px-0 py-1">
         <Plus className="ml-[22px] size-4 shrink-0 text-faint" />
         <input
@@ -224,6 +291,28 @@ function Subtasks({ task }) {
 }
 
 const fmt = (iso) => (iso ? new Date(iso).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) : '');
+
+/** Submenu listing the other active projects; the task keeps its column name when the target has one. */
+function MoveToProject({ task }) {
+  const projectId = useBoard((s) => s.projectId);
+  const projects = useBoard((s) => s.projects);
+  const others = projects.filter((p) => !p.archived && p.id !== projectId);
+  return (
+    <MenuSub>
+      <MenuSubTrigger disabled={!others.length}>
+        <FolderInput /> Move to project
+      </MenuSubTrigger>
+      <MenuSubContent className="max-h-[50vh] min-w-[200px] overflow-y-auto">
+        {others.map((p) => (
+          <MenuItem key={p.id} onSelect={() => useBoard.getState().moveTaskToProject(task.id, p.id)}>
+            <span className="w-4 text-center text-[14px] leading-none">{p.icon}</span>
+            <span className="min-w-0 flex-1 truncate">{p.name}</span>
+          </MenuItem>
+        ))}
+      </MenuSubContent>
+    </MenuSub>
+  );
+}
 
 export function TaskSheet() {
   const selectedId = useBoard((s) => s.selectedId);
@@ -256,13 +345,15 @@ export function TaskSheet() {
             <Button size="sm" variant="ghost" onClick={() => archiveTask(t.id)}>
               <Archive className="size-3.5" /> Archive
             </Button>
-            <Menu>
+            <Menu onOpenChange={(o) => o && useBoard.getState().loadHome()}>
               <MenuTrigger asChild>
                 <IconButton label="More">
                   <MoreHorizontal className="size-4" />
                 </IconButton>
               </MenuTrigger>
               <MenuContent>
+                <MoveToProject task={t} />
+                <MenuSeparator />
                 <MenuItem
                   danger
                   onSelect={(e) => {
@@ -320,6 +411,9 @@ export function TaskSheet() {
             </Row>
             <Row label="Start">
               <StartPicker startAt={t.startAt} dueAt={t.dueAt} onChange={(startAt) => updateTask(t.id, { startAt })} />
+            </Row>
+            <Row label="Repeat">
+              <RepeatPicker task={t} />
             </Row>
             <Row label="Estimate">
               <EstimatePicker task={t} project={project} onChange={(estimateMinutes) => updateTask(t.id, { estimateMinutes })} />
