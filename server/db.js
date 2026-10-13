@@ -255,6 +255,20 @@ function migrate() {
       db.exec('PRAGMA user_version = 9');
     });
   }
+  if (user_version < 10) {
+    // v10: any change to the next task in a series (edits, subtasks, moves, timers) unlinks it,
+    // so reopening the one before can't take back work that has started
+    tx(() => {
+      db.exec(`
+        CREATE TRIGGER tasks_repeat_touched AFTER UPDATE ON tasks
+        WHEN OLD.repeat_of IS NOT NULL AND NEW.repeat_of IS OLD.repeat_of
+        BEGIN
+          UPDATE tasks SET repeat_of = NULL WHERE id = NEW.id;
+        END;
+      `);
+      db.exec('PRAGMA user_version = 10');
+    });
+  }
 }
 
 const DEFAULT_COLUMNS = [
@@ -786,9 +800,9 @@ function repeatTask(task, projectId) {
   return next;
 }
 
-/** Reopening a finished task (or undoing it) takes back the next one, as long as nobody has touched it. */
+/** Reopening a finished task (or undoing it) takes back the next one, as long as nobody has touched it (see v10). */
 function unrepeatTask(id) {
-  const next = q('SELECT id, repeat FROM tasks WHERE repeat_of = ? AND archived = 0 AND updated_at = created_at').get(id);
+  const next = q('SELECT id, repeat FROM tasks WHERE repeat_of = ?').get(id);
   if (!next) return;
   q('DELETE FROM tasks WHERE id = ?').run(next.id);
   q('UPDATE tasks SET repeat = ? WHERE id = ?').run(next.repeat, id);

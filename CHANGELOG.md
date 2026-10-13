@@ -13,6 +13,7 @@
 - ↕️ **Sort the home page by priority** (urgent first), or keep your own drag order.
 - Drag subtasks by their grip to reorder them.
 - 🎙️ **Push-to-talk:** in chat, hold Space to speak and let go to send.
+- 🎨 **Seven new themes:** Catppuccin Latte and Mocha, Tokyo Night, Everforest and Everforest Light, Nord and Kanagawa (31 in all). Colours follow the originals, adjusted where needed so text stays readable.
 
 ## v1.0.0 · 2026-10-04
 

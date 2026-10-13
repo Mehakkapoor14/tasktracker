@@ -40,6 +40,7 @@ mcp/index.js        ← MCP server for AI agents: reads directly, writes become 
 shared/due.js       ← "Due tomorrow" / "Overdue 2d" labels, shared by UI + MCP
 shared/tags.js      ← tag colours and add/remove helpers, shared by UI, chat + MCP
 shared/estimate.js  ← estimate sizes, parsing ("M", "2.5h", "1d") and money formatting
+shared/repeat.js    ← repeating tasks: repeat names and the next one's dates, shared by UI + server
 web/public/
   sw.js             ← service worker: notifications, installable app shell
   manifest.webmanifest, icons/
@@ -48,7 +49,7 @@ web/src/
   router.js         ← "/" home page, "/p/:id" project boards
   pwa.js            ← install prompt, push subscription, notification clicks
   voice.js          ← mic recording, browser speech fallback, reading answers aloud
-  themes.js         ← theme list for the picker
+  themes.js         ← theme list for the picker (and which themes are dark)
   styles.css        ← theme colours (CSS variables) + global styles
   dates.js          ← date presets & quick-add parser (@fri !high)
   components/       ← Home, Board, Timeline, AgentInbox, Chat, Note, Estimate, Column, TaskCard, TaskSheet, Tags, …
@@ -61,7 +62,7 @@ test/               ← node:test suite
 
 1. In `web/src/styles.css`, copy an existing `[data-theme='…']` block and give it a new id. Every colour, font and shadow is a CSS variable.
 2. Add an entry to `web/src/themes.js` with a name, tagline and four swatch colours.
-3. If it's a dark theme, add its id to the `dark` list in `web/src/App.jsx`, and to the `--bar-l: 0.65` block in `styles.css` so the home-page status bars stay readable.
+3. If it's a dark theme, set `dark: true` on its entry in `themes.js` (for dark toasts and Mermaid diagrams), and add its id to the `--bar-l: 0.65` block in `styles.css` so the home-page status bars stay readable.
 4. Check that text is readable (aim for WCAG AA contrast), and that due-date chips, priority icons, formatted notes (including a Mermaid diagram) and the home page's status bars all look good.
 5. Include a screenshot in your PR!
 
@@ -95,28 +96,28 @@ The [roadmap in the README](README.md#-roadmap) has the bigger picture. These ar
 
 | Idea | Difficulty |
 | --- | --- |
-| New themes (Catppuccin, Tokyo Night, Everforest, Nord…) | 🟢 Easy |
-| Drag to reorder subtasks in the task panel | 🟢 Easy |
+| More themes, including light twins of dark ones (Rosé Pine Dawn, Tokyo Night Day, One Dark, Ayu…) | 🟢 Easy |
 | Keyboard shortcuts help dialog (<kbd>?</kbd>) | 🟢 Easy |
 | Clickable `#id` task links in chat replies | 🟢 Easy |
 | Copy button on chat replies | 🟢 Easy |
-| Saved filters (a tag + deadline + search combination) | 🟡 Medium |
-| Sort the home page by project priority | 🟢 Easy |
+| Repeat in quick add: `Water plants *weekly` (parser in `web/src/dates.js`, names in `shared/repeat.js`) | 🟢 Easy |
+| More home-page sorts: next deadline, most overdue, recently updated | 🟢 Easy |
 | Timeline: a "jump to today" button and remembering scroll position | 🟢 Easy |
+| Saved filters (a tag + deadline + search combination) | 🟡 Medium |
+| Custom repeats: "every 3 days", "every Mon and Thu", "last Friday of the month" | 🟡 Medium |
+| End a repeat after N times or on a date | 🟡 Medium |
+| Move several tasks to another project at once (multi-select on the board) | 🟡 Medium |
 | Timeline: show project start/end milestones you set by hand | 🟡 Medium |
 | Snooze a reminder from the notification | 🟡 Medium |
 | Export / import the board as JSON or Markdown | 🟡 Medium |
-| Recurring tasks (daily, weekly…) | 🟡 Medium |
 | Command palette (<kbd>⌘K</kbd>) | 🟡 Medium |
 | Natural-language task capture: "renew insurance next Friday, high priority" → a filled-in task | 🟡 Medium |
 | Daily briefing notification: what's due and a suggested plan | 🟡 Medium |
 | Undo button on applied chat changes | 🟡 Medium |
-| Voice: a push-to-talk keyboard shortcut (hold Space) | 🟢 Easy |
 | Native tool calling for providers that support it (keep the approval card) | 🟠 Advanced |
 | Planning agent: propose deadline, priority and breakdown changes as a diff you approve | 🟠 Advanced |
 | Semantic search with local embeddings | 🟠 Advanced |
 | Streamable-HTTP transport for the MCP server | 🟠 Advanced |
-| Move tasks between projects | 🟠 Advanced |
 | HTTPS on the local network, so phones can install the app | 🟠 Advanced |
 
 **Working on AI features?** Business logic still belongs in `server/db.js`; the chat (`server/chat.js`) and MCP server should call it, never write SQL themselves. Test against a local model (Ollama or LM Studio) so you don't need an API key, and never commit keys or provider URLs.

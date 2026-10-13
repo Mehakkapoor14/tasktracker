@@ -7,8 +7,7 @@ import remarkBreaks from 'remark-breaks';
 import { Maximize2, Pencil, X } from 'lucide-react';
 import { useBoard } from '../store';
 import { cx, IconButton } from './ui';
-
-const DARK = ['midnight', 'espresso', 'graphite', 'terminal', 'grayscale-dark', 'cardinal', 'navy-gold', 'dracula', 'rose-pine', 'gruvbox', 'neon-orange'];
+import { isDarkTheme } from '../themes';
 
 // ---------- mermaid (lazy) ----------
 
@@ -33,7 +32,7 @@ const Diagram = memo(function Diagram({ code }) {
 
   useEffect(() => {
     let alive = true;
-    loadMermaid(DARK.includes(theme))
+    loadMermaid(isDarkTheme(theme))
       .then((m) => m.render(`mmd-${id}-${Date.now()}`, code))
       .then(({ svg }) => alive && (setSvg(svg), setError(null)))
       .catch((e) => alive && (setSvg(null), setError(String(e?.message || e).split('\n')[0])));

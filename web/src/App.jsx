@@ -12,6 +12,7 @@ import { TipProvider } from './components/ui';
 import Home from './components/Home';
 import { useProjectRoute } from './router';
 import { showReminderFallback, syncThemeColor } from './pwa';
+import { isDarkTheme } from './themes';
 
 const isTyping = (el) => el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable);
 
@@ -80,7 +81,7 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKey);
   }, [archiveOpen, onHome]);
 
-  const dark = ['midnight', 'espresso', 'graphite', 'terminal', 'grayscale-dark', 'cardinal', 'navy-gold', 'dracula', 'rose-pine', 'gruvbox', 'neon-orange'].includes(theme);
+  const dark = isDarkTheme(theme);
 
   return (
     <TipProvider>

@@ -135,10 +135,10 @@ Then just ask:
 | `get_board` | Columns and tasks of one project (`project: "website"`, fuzzy) |
 | `list_tasks` | Search across all projects or one: column, text, `tag`, `due_within_days`, `overdue`, archived |
 | `get_task` | Full details, including subtask ids |
-| `create_task` | Project, column, title, description, note (Markdown), priority, start and due dates, estimate, subtasks, tags |
-| `update_task` | Change any field incl. `estimate` (`""` clears dates or the estimate), `add_tags` / `remove_tags` |
-| `move_task` | Move by column name (fuzzy: `"in prog"` works) or id |
-| `complete_task` | Move to the done column, optionally appending a summary |
+| `create_task` | Project, column, title, description, note (Markdown), priority, start and due dates, estimate, `repeat`, subtasks, tags |
+| `update_task` | Change any field incl. `estimate` and `repeat` (`""` clears dates, the estimate or the repeat), `add_tags` / `remove_tags` |
+| `move_task` | Move by column name (fuzzy: `"in prog"` works) or id, or to another `project` |
+| `complete_task` | Move to the done column, optionally appending a summary. A repeating task adds its next one |
 | `archive_task` | Archive, or restore with `archived: false` |
 | `append_note` | Add a timestamped line to the note (great for progress logs) |
 | `add_subtasks` | Add checklist items |
@@ -200,7 +200,7 @@ Click ✨ in the top bar. Connect any OpenAI-compatible provider once (one-click
 <td valign="top">
 
 ### 🎙️ Talk
-- Tap the **mic** and speak. It stops listening when you pause.
+- Tap the **mic** and speak. It stops listening when you pause. Or **hold Space** to talk and let go to send.
 - Turn on **read answers aloud** 🔊 to hear the reply.
 - Asked by voice? The mic reopens after each answer, for a **hands-free** conversation. Proposed changes pause it so you can review them.
 - Uses your provider's speech models (e.g. Whisper) if you set them, or your browser's built-in speech.
@@ -243,7 +243,7 @@ Click ✨ in the top bar. Connect any OpenAI-compatible provider once (one-click
 - **Totals and status breakdown** for each project, with a progress ring, overdue and due-this-week counts
 - **Priority and tags on projects**: mark what matters most, and filter the home page by tag (`work`, `personal`, `Q4`…)
 - **Coming up**: everything due in the next 7 days across *all* projects; click a card to open that task
-- **Drag projects to reorder them**; create, edit, archive or delete them. New projects start with four columns, or copy another project's
+- **Drag projects to reorder them**, or **sort by priority** (urgent first); create, edit, archive or delete them. New projects start with four columns, or copy another project's
 
 ### 🗓️ Timeline: plan across time, drag to reschedule
 
@@ -278,9 +278,10 @@ On the home page, switch **Projects** to **Timeline** to see every project at on
 <td width="50%" valign="top">
 
 #### Rich, frictionless cards
-- Title, description, **subtasks** with a progress bar, and a **Markdown note** with Mermaid diagrams
+- Title, description, **subtasks** with a progress bar (drag to reorder), and a **Markdown note** with Mermaid diagrams
 - **Priority** from Low to Urgent, colour **tags** (click one to filter the board), and an optional **estimate** (XS–XL or exact)
 - **Archive** with one click (with Undo); restore or delete from the archive
+- **Move to another project** from the panel's ⋯ menu; it keeps its status where the column names match
 - **Search** finds text in any field, including tags
 
 </td>
@@ -292,6 +293,7 @@ On the home page, switch **Projects** to **Timeline** to see every project at on
 - Pick a date with an optional time, or a preset: *Today*, *Tomorrow*, *In 2 days*, *Next week*
 - Cards read **Due today**, **Due in 3h**, **Due next week** or **Overdue by 2d**, updated live
 - An optional **start date** turns a task into a span on the timeline
+- **Repeating tasks**: every day, weekday, week, 2 weeks, month or year. Finish one and the next appears with its dates moved on, never already overdue
 - **Due this week** and **Overdue** filters, and a start/pause **time tracker** on every task
 
 </td>
@@ -357,7 +359,7 @@ Task Tracker is a **Progressive Web App**: click **Install** in the top bar (Chr
 
 ## 🎨 Themes
 
-Twenty-four themes designed for focus. Switch instantly from the brush icon; your choice applies everywhere and is remembered.
+Thirty-one themes designed for focus. Switch instantly from the brush icon; your choice applies everywhere and is remembered.
 
 | | | |
 |:-:|:-:|:-:|
@@ -366,7 +368,7 @@ Twenty-four themes designed for focus. Switch instantly from the brush icon; you
 | <img src="docs/screenshots/board-solarized.png" alt="Solarized theme" /><br/>**Solarized** · precise and warm | <img src="docs/screenshots/board-gruvbox.png" alt="Gruvbox theme" /><br/>**Gruvbox** · retro and earthy | <img src="docs/screenshots/board-bubblegum.png" alt="Bubblegum theme" /><br/>**Bubblegum** · playful pink |
 | <img src="docs/screenshots/board-grayscale.png" alt="Grayscale theme" /><br/>**Grayscale** · no colour, no glare | <img src="docs/screenshots/board-navy-gold.png" alt="Navy & Gold theme" /><br/>**Navy & Gold** · golden highlights | <img src="docs/screenshots/board-neon-orange.png" alt="Neon Orange theme" /><br/>**Neon Orange** · glowing amber |
 
-Also included: **Paper** · **New York** · **Nordic Frost** · **Sage Garden** · **Espresso Library** · **Graphite** · **Grayscale Dark** · **Crimson** · **Ivy** · **Cardinal** · **Sunset Orange** · **Harbor Gold**
+Also included: **Catppuccin Latte** and **Mocha** · **Tokyo Night** · **Everforest** and **Everforest Light** · **Nord** · **Kanagawa** · **Paper** · **New York** · **Nordic Frost** · **Sage Garden** · **Espresso Library** · **Graphite** · **Grayscale Dark** · **Crimson** · **Ivy** · **Cardinal** · **Sunset Orange** · **Harbor Gold**
 
 ## 🏗️ How it works
 
@@ -585,6 +587,10 @@ The AI provider (and optional voice models) is configured in the app (✨ → se
 Task Tracker is young and moving fast. Here's where it's heading, and **every item is open for contributors**. Comment on an issue (or open one) to claim it.
 
 ### ✅ Recently shipped
+- 🔁 **Repeating tasks**: daily to yearly, with the next one added when you finish
+- 📦 **Move tasks between projects**, from the task panel or by an agent
+- ↕️ **Sort the home page by priority**, drag-to-reorder subtasks, and **hold Space to talk**
+- 🎨 **Seven new themes**: Catppuccin Latte & Mocha, Tokyo Night, Everforest (dark & light), Nord and Kanagawa
 - ⏱️ **Estimates and cost**: XS–XL sizes or exact amounts, over-estimate hints, per-project hourly rate
 - 📝 **Markdown notes** with tickable checklists and Mermaid diagrams
 - 🤝 **Multi-agent safety**: "working on it" claims that expire on their own, and warnings for changes made since an agent asked
@@ -596,7 +602,7 @@ Task Tracker is young and moving fast. Here's where it's heading, and **every it
 - ✨ **AI chat** with any OpenAI-compatible provider, grounded in your board
 - 🗂️ Multiple projects with a home page, drag-to-reorder projects and columns
 - 📲 Installable app with deadline reminders that work while it's closed
-- 🎨 Twenty-four themes
+- 🎨 Thirty-one themes
 
 ### 🤖 AI and agents
 
@@ -618,12 +624,11 @@ Task Tracker is young and moving fast. Here's where it's heading, and **every it
 | --- | --- |
 | 🎯 **Goals**: link tasks to longer-term goals and track progress toward them | 📋 Planned |
 | 🔗 **Task dependencies**: "blocked by #12", drawn as links on the timeline | 🧪 Exploring |
-| 🔁 **Recurring tasks**: daily, weekly, monthly, or custom | 🙋 Help wanted |
+| 🔁 **Custom repeats**: "every 3 days", "every Mon and Thu", or ending after N times | 🙋 Help wanted |
 | 💾 **Saved filters**: a tag + deadline + search combination one click away | 🙋 Help wanted |
 | 🗓️ **Calendar view**: a month grid of deadlines | 🙋 Help wanted |
 | 🍅 **Focus mode**: one task, a Pomodoro timer, everything else hidden | 🙋 Help wanted |
 | 📄 **Task templates** for repeatable checklists | 🙋 Help wanted |
-| 🔀 **Move tasks between projects** | 🙋 Help wanted |
 
 ### 🔄 Data and platforms
 
@@ -642,7 +647,7 @@ Task Tracker is young and moving fast. Here's where it's heading, and **every it
 
 ```bash
 npm run dev     # API on :1717 + Vite with hot reload on :5173
-npm test        # data layer, reminders, tags, timeline, chat, actions and voice tests (node:test)
+npm test        # data layer, reminders, tags, timeline, repeats, chat, actions and voice tests (node:test)
 npm run build   # production build of the UI
 ```
 

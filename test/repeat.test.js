@@ -65,6 +65,14 @@ test('finishing a repeating task adds the next one; reopening takes it back', ()
   store.updateTask(kept.id, { priority: 'high' });
   store.moveTask(t.id, { columnId: open.id });
   assert.equal(store.getTask(kept.id).repeat, 'weekly');
+
+  // ticking a subtask counts as working on it too
+  const t2 = store.createTask({ title: 'Stretch', repeat: 'daily', subtasks: ['Neck'] });
+  store.completeTask(t2.id);
+  const n2 = store.listTasks({ query: 'Stretch' }).find((x) => x.id !== t2.id);
+  store.updateSubtask(n2.subtasks[0].id, { done: true });
+  store.moveTask(t2.id, { columnId: open.id });
+  assert.ok(store.getTask(n2.id));
 });
 
 test('chat and agents can set a repeat in plain words', () => {
