@@ -41,18 +41,20 @@ shared/due.js       ← "Due tomorrow" / "Overdue 2d" labels, shared by UI + MCP
 shared/tags.js      ← tag colours and add/remove helpers, shared by UI, chat + MCP
 shared/estimate.js  ← estimate sizes, parsing ("M", "2.5h", "1d") and money formatting
 shared/repeat.js    ← repeating tasks: repeat names and the next one's dates, shared by UI + server
+shared/calendar.js  ← working hours, block repeats, free time, "does the work fit", and the plan suggester
 web/public/
   sw.js             ← service worker: notifications, installable app shell
   manifest.webmanifest, icons/
 web/src/
   store.js          ← Zustand store with optimistic updates
-  router.js         ← "/" home page, "/p/:id" project boards
+  router.js         ← "/" home page, "/p/:id" project boards, "/calendar"
+  calendar.js       ← calendar state: range on screen, blocks being edited, a suggested plan
   pwa.js            ← install prompt, push subscription, notification clicks
   voice.js          ← mic recording, browser speech fallback, reading answers aloud
   themes.js         ← theme list for the picker (and which themes are dark)
   styles.css        ← theme colours (CSS variables) + global styles
   dates.js          ← date presets & quick-add parser (@fri !high)
-  components/       ← Home, Board, Timeline, AgentInbox, Chat, Note, Estimate, Column, TaskCard, TaskSheet, Tags, …
+  components/       ← Home, Board, Timeline, Calendar (+ CalendarGrid, BlockEditor, WorkHours), AgentInbox, Chat, Note, …
 test/               ← node:test suite
 ```
 
@@ -108,6 +110,8 @@ The [roadmap in the README](README.md#-roadmap) has the bigger picture. These ar
 | End a repeat after N times or on a date | 🟡 Medium |
 | Move several tasks to another project at once (multi-select on the board) | 🟡 Medium |
 | Timeline: show project start/end milestones you set by hand | 🟡 Medium |
+| Calendar: import an `.ics` file, or subscribe to a calendar feed as busy time | 🟡 Medium |
+| Calendar: start the timer when booked task time begins | 🟢 Easy |
 | Snooze a reminder from the notification | 🟡 Medium |
 | Export / import the board as JSON or Markdown | 🟡 Medium |
 | Command palette (<kbd>⌘K</kbd>) | 🟡 Medium |

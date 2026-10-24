@@ -8,6 +8,7 @@ import { dirname, join } from 'node:path';
 import { tagColor } from '../shared/tags.js';
 import { MAX_ESTIMATE } from '../shared/estimate.js';
 import { nextDates, parseRepeat, REPEATS } from '../shared/repeat.js';
+import { addDays, BLOCK_KINDS, cleanWeek, dayDate, DEFAULT_SESSION, DEFAULT_WEEK, expandBlocks, suggestPlan, weekStart } from '../shared/calendar.js';
 
 // Lives outside the project so the web app and MCP server always share one DB,
 // and so cloud-synced folders (iCloud/Dropbox) never touch a live SQLite file.
@@ -267,6 +268,32 @@ function migrate() {
         END;
       `);
       db.exec('PRAGMA user_version = 10');
+    });
+  }
+  if (user_version < 11) {
+    // v11: the calendar — time blocks for meetings, booked task time and time off.
+    // Timed blocks store ISO datetimes, all-day ones 'YYYY-MM-DD' days (both ends included).
+    tx(() => {
+      db.exec(`
+        CREATE TABLE blocks (
+          id           INTEGER PRIMARY KEY,
+          kind         TEXT    NOT NULL DEFAULT 'busy',
+          title        TEXT    NOT NULL DEFAULT '',
+          note         TEXT    NOT NULL DEFAULT '',
+          task_id      INTEGER REFERENCES tasks(id) ON DELETE CASCADE,
+          all_day      INTEGER NOT NULL DEFAULT 0,
+          start_at     TEXT    NOT NULL,
+          end_at       TEXT    NOT NULL,
+          repeat       TEXT,
+          repeat_until TEXT,
+          skips        TEXT    NOT NULL DEFAULT '[]',
+          created_at   TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+          updated_at   TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+        );
+        CREATE INDEX blocks_end ON blocks(end_at);
+        CREATE INDEX blocks_task ON blocks(task_id);
+      `);
+      db.exec('PRAGMA user_version = 11');
     });
   }
 }
@@ -1214,6 +1241,327 @@ export function deleteSubtask(id) {
   });
 }
 
+// ---------- calendar: working hours and time blocks ----------
+// A block is time taken: 'busy' (meetings, appointments), 'task' (time booked for a task) or
+// 'off' (holidays, days off). Repeating blocks are stored once and expanded per occurrence;
+// removing or changing one occurrence skips it in the series (and gives it a block of its own).
+
+const BLOCK_KIND_KEYS = Object.keys(BLOCK_KINDS);
+const MAX_TIMED_BLOCK = 24 * 3600000;
+
+function mapBlock(r) {
+  return (
+    r && {
+      id: r.id,
+      kind: r.kind,
+      title: r.title,
+      note: r.note,
+      taskId: r.task_id ?? null,
+      allDay: !!r.all_day,
+      startAt: r.start_at,
+      endAt: r.end_at,
+      repeat: r.repeat ?? null,
+      repeatUntil: r.repeat_until ?? null,
+      skips: JSON.parse(r.skips || '[]'),
+      createdAt: r.created_at,
+      updatedAt: r.updated_at,
+    }
+  );
+}
+
+export function getBlock(id) {
+  const b = mapBlock(q('SELECT * FROM blocks WHERE id = ?').get(Number(id)));
+  if (!b) throw new AppError(404, `Calendar block ${id} not found`);
+  return b;
+}
+
+/** 'YYYY-MM-DDTHH:MM' (local time) or any ISO datetime → ISO. */
+function parseMoment(v, field) {
+  const s = String(v ?? '').trim();
+  if (!s) throw new AppError(400, `The ${field} time is missing`);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) throw new AppError(400, `The ${field} needs a time of day, like ${s}T09:00 (or make it an all-day block)`);
+  const t = Date.parse(s);
+  if (Number.isNaN(t)) throw new AppError(400, `Invalid ${field} time: ${s} (use YYYY-MM-DDTHH:MM)`);
+  return new Date(t).toISOString();
+}
+
+/** A whole day, 'YYYY-MM-DD' (a datetime is cut to its local day). */
+function parseDay(v, field) {
+  try {
+    const d = parseStart(v);
+    if (d) return d;
+  } catch {}
+  throw new AppError(400, `Invalid ${field} date: ${v ?? ''} (use YYYY-MM-DD)`);
+}
+
+/** Validate a whole block; returns the values to store. */
+function cleanBlock(b) {
+  const kind = b.kind ?? (b.taskId != null ? 'task' : 'busy');
+  if (!BLOCK_KIND_KEYS.includes(kind)) throw new AppError(400, `kind must be one of ${BLOCK_KIND_KEYS.join(', ')}`);
+  const taskId = kind === 'task' && b.taskId != null && b.taskId !== '' ? getTask(b.taskId).id : null;
+  if (kind === 'task' && !taskId) throw new AppError(400, 'Task time needs a task to book it for');
+  const allDay = !!b.allDay;
+  let startAt;
+  let endAt;
+  if (allDay) {
+    startAt = parseDay(b.startAt, 'start');
+    endAt = b.endAt ? parseDay(b.endAt, 'end') : startAt;
+    if (endAt < startAt) throw new AppError(400, 'The block ends before it starts');
+    if (dayDate(endAt) - dayDate(startAt) > 366 * 86400000) throw new AppError(400, 'An all-day block can be at most a year long');
+  } else {
+    startAt = parseMoment(b.startAt, 'start');
+    endAt = parseMoment(b.endAt, 'end');
+    const len = Date.parse(endAt) - Date.parse(startAt);
+    if (len <= 0) throw new AppError(400, 'A block has to end after it starts');
+    if (len > MAX_TIMED_BLOCK) throw new AppError(400, 'A timed block can be at most 24 hours. Use an all-day block for longer.');
+  }
+  const repeat = cleanRepeat(b.repeat);
+  const repeatUntil = repeat && b.repeatUntil ? parseDay(b.repeatUntil, 'repeat until') : null;
+  if (repeatUntil && repeatUntil < (allDay ? startAt : localDate(new Date(startAt)))) throw new AppError(400, 'The repeat can’t end before the first one');
+  return {
+    kind,
+    title: cleanText(b.title, 'title', { max: 200 }).trim(),
+    note: cleanText(b.note, 'note', { max: 2000 }),
+    taskId,
+    allDay,
+    startAt,
+    endAt,
+    repeat,
+    repeatUntil,
+  };
+}
+
+export function createBlock(input = {}) {
+  return tx(() => {
+    const v = cleanBlock(input);
+    const id = q('INSERT INTO blocks (kind, title, note, task_id, all_day, start_at, end_at, repeat, repeat_until) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run(
+      v.kind,
+      v.title,
+      v.note,
+      v.taskId,
+      v.allDay ? 1 : 0,
+      v.startAt,
+      v.endAt,
+      v.repeat,
+      v.repeatUntil
+    ).lastInsertRowid;
+    return getBlock(id);
+  });
+}
+
+/** Create several blocks at once, all or nothing (e.g. an accepted plan). */
+export function createBlocks(list) {
+  if (!Array.isArray(list) || !list.length) throw new AppError(400, 'blocks must be a non-empty list');
+  if (list.length > 200) throw new AppError(400, 'That’s too many blocks at once (at most 200)');
+  return tx(() => list.map((b) => createBlock(b)));
+}
+
+/** The occurrence of a repeating block that starts on `day`. */
+function occurrenceOf(b, day) {
+  const d = parseDay(day, 'occurrence');
+  const occ = expandBlocks([b], dayDate(d).getTime(), dayDate(addDays(d, 1)).getTime()).find((o) => o.day === d);
+  if (!occ) throw new AppError(404, `“${b.title || 'This block'}” doesn’t happen on ${d}`);
+  return occ;
+}
+
+/** `iso` moved by the same days and to the same local time as `occ` → `next` (keeps its time across daylight saving). */
+function moveLike(iso, occMs, nextIso) {
+  const base = new Date(iso);
+  const was = new Date(occMs);
+  const to = new Date(nextIso);
+  const days = Math.round((dayDate(localDate(to)) - dayDate(localDate(was))) / 86400000);
+  return new Date(base.getFullYear(), base.getMonth(), base.getDate() + days, to.getHours(), to.getMinutes()).toISOString();
+}
+
+/**
+ * What an update would store. With `occurrence` on a repeating block, `scope: 'one'` (the
+ * default) changes only that one (it's skipped in the series and becomes a block of its own);
+ * `scope: 'all'` changes the series, with times given for that occurrence.
+ */
+function plannedUpdate(b, patch, { occurrence, scope = 'one' } = {}) {
+  if (occurrence && b.repeat) {
+    const occ = occurrenceOf(b, occurrence);
+    if (scope !== 'all') return { detach: occ.day, values: cleanBlock({ ...b, startAt: occ.startAt, endAt: occ.endAt, repeat: null, repeatUntil: null, ...patch }) };
+    if (!b.allDay && !patch.allDay) {
+      patch = {
+        ...patch,
+        ...(patch.startAt !== undefined && { startAt: moveLike(b.startAt, occ.start, parseMoment(patch.startAt, 'start')) }),
+        ...(patch.endAt !== undefined && { endAt: moveLike(b.endAt, occ.end, parseMoment(patch.endAt, 'end')) }),
+      };
+    } else if (b.allDay && patch.allDay !== false) {
+      const shift = (field) => patch[field] !== undefined && { [field]: addDays(b[field], Math.round((dayDate(parseDay(patch[field], field)) - dayDate(occ[field])) / 86400000)) };
+      patch = { ...patch, ...shift('startAt'), ...shift('endAt') };
+    }
+  }
+  return { detach: null, values: cleanBlock({ ...b, ...patch }) };
+}
+
+/** Check an update without writing it; returns the values it would store. */
+export const checkBlockUpdate = (id, patch = {}, opts = {}) => plannedUpdate(getBlock(id), patch, opts).values;
+
+/** Check a new block without writing it; returns the values it would store. */
+export const checkBlock = (input = {}) => cleanBlock(input);
+
+function skipOccurrence(b, day) {
+  q('UPDATE blocks SET skips = ?, updated_at = ? WHERE id = ?').run(JSON.stringify([...new Set([...b.skips, day])].sort()), now(), b.id);
+}
+
+export function updateBlock(id, patch = {}, opts = {}) {
+  return tx(() => {
+    const b = getBlock(id);
+    const { detach, values: v } = plannedUpdate(b, patch, opts);
+    if (detach) {
+      skipOccurrence(b, detach);
+      return createBlock(v);
+    }
+    q(
+      'UPDATE blocks SET kind = ?, title = ?, note = ?, task_id = ?, all_day = ?, start_at = ?, end_at = ?, repeat = ?, repeat_until = ?, skips = ?, updated_at = ? WHERE id = ?'
+    ).run(v.kind, v.title, v.note, v.taskId, v.allDay ? 1 : 0, v.startAt, v.endAt, v.repeat, v.repeatUntil, JSON.stringify(v.repeat ? b.skips : []), now(), b.id);
+    return getBlock(b.id);
+  });
+}
+
+/** Delete a block, or with `occurrence` only that day's occurrence of a repeating one. */
+export function deleteBlock(id, { occurrence } = {}) {
+  return tx(() => {
+    const b = getBlock(id);
+    if (occurrence && b.repeat) {
+      const { day } = occurrenceOf(b, occurrence);
+      skipOccurrence(b, day);
+      return { skipped: day, blockId: b.id };
+    }
+    q('DELETE FROM blocks WHERE id = ?').run(b.id);
+    return { deleted: b.id };
+  });
+}
+
+/** Each occurrence's task (title, project, whether it's done) when it books one. */
+function withBlockTasks(list) {
+  const ids = [...new Set(list.map((b) => b.taskId).filter(Boolean))];
+  if (!ids.length) return list;
+  const rows = q(
+    `SELECT t.id, t.title, t.priority, t.archived, c.project_id, c.is_done FROM tasks t JOIN columns c ON c.id = t.column_id WHERE t.id IN (SELECT value FROM json_each(?))`
+  ).all(JSON.stringify(ids));
+  const byId = new Map(rows.map((r) => [r.id, { id: r.id, title: r.title, priority: r.priority, projectId: r.project_id, done: !!r.is_done, archived: !!r.archived }]));
+  return list.map((b) => (b.taskId ? { ...b, task: byId.get(b.taskId) || null } : b));
+}
+
+/** Occurrences of every block overlapping [from, to) (ms), soonest first. */
+export function listBlocks({ from, to }) {
+  const since = localDate(new Date(from - 2 * 86400000));
+  const rows = q('SELECT * FROM blocks WHERE repeat IS NOT NULL OR end_at >= ? ORDER BY start_at').all(since).map(mapBlock);
+  return withBlockTasks(expandBlocks(rows, from, to));
+}
+
+/** Minutes of task time booked from now on, by task id. */
+export function bookedMinutes(nowMs = Date.now()) {
+  const rows = q("SELECT * FROM blocks WHERE kind = 'task' AND (repeat IS NOT NULL OR end_at >= ?)").all(localDate(new Date(nowMs - 86400000))).map(mapBlock);
+  const out = {};
+  for (const o of expandBlocks(rows, nowMs, nowMs + 366 * 86400000)) out[o.taskId] = (out[o.taskId] || 0) + Math.round((o.end - Math.max(o.start, nowMs)) / 60000);
+  return out;
+}
+
+export function getCalendarSettings() {
+  return { week: DEFAULT_WEEK, sessionMinutes: DEFAULT_SESSION, ...getSetting('calendar', {}) };
+}
+
+export function updateCalendarSettings(patch = {}) {
+  return tx(() => {
+    const next = getCalendarSettings();
+    if (patch.week !== undefined) {
+      try {
+        next.week = cleanWeek(patch.week);
+      } catch (err) {
+        throw new AppError(400, err.message);
+      }
+    }
+    if (patch.sessionMinutes !== undefined) {
+      const m = Math.round(Number(patch.sessionMinutes));
+      if (!(m >= 30 && m <= 480)) throw new AppError(400, 'sessionMinutes must be between 30 and 480');
+      next.sessionMinutes = m;
+    }
+    setSetting('calendar', next);
+    return next;
+  });
+}
+
+/** Open tasks that can be planned: in active projects and visible columns that aren't done. */
+export function plannableTasks({ projectId, minPriority, taskIds } = {}) {
+  const rows = q(
+    `SELECT t.*, c.project_id AS project_id FROM tasks t JOIN columns c ON c.id = t.column_id JOIN projects p ON p.id = c.project_id
+     WHERE t.archived = 0 AND p.archived = 0 AND c.hidden = 0 AND c.is_done = 0 ORDER BY p.position, c.position, t.position`
+  ).all();
+  const min = minPriority ? PRIORITIES.indexOf(minPriority) : 0;
+  if (min < 0) throw new AppError(400, `priority must be one of ${PRIORITIES.join(', ')}`);
+  const ids = taskIds?.length ? new Set(taskIds.map(Number)) : null;
+  const keep = rows.filter((r) => (projectId == null || r.project_id === Number(projectId)) && PRIORITIES.indexOf(r.priority) >= min && (!ids || ids.has(r.id)));
+  return withSubtasks(keep).map((t, i) => ({ ...t, projectId: keep[i].project_id }));
+}
+
+/** [start, end) in ms for a range of whole days ('YYYY-MM-DD', both included). */
+function dayRange(from, to, { maxDays = 120 } = {}) {
+  const a = parseDay(from, 'from');
+  const b = parseDay(to, 'to');
+  if (b < a) throw new AppError(400, 'The end of the range is before its start');
+  const start = dayDate(a).getTime();
+  const end = dayDate(addDays(b, 1)).getTime();
+  if (end - start > maxDays * 86400000) throw new AppError(400, `Ask for at most ${maxDays} days at a time`);
+  return { a, b, start, end };
+}
+
+/**
+ * Everything the calendar needs for the days `from`–`to`: working hours, block occurrences,
+ * open tasks (and finished ones due in the range), active projects, and each task's booked
+ * minutes from now on.
+ */
+export function calendar({ from, to }) {
+  const { a, b, start, end } = dayRange(from, to);
+  const rows = q(
+    `SELECT t.*, c.project_id AS project_id, c.is_done AS done FROM tasks t JOIN columns c ON c.id = t.column_id JOIN projects p ON p.id = c.project_id
+     WHERE t.archived = 0 AND p.archived = 0 AND c.hidden = 0 AND (c.is_done = 0 OR (t.due_at >= ? AND t.due_at < ?))
+     ORDER BY p.position, c.position, t.position`
+  ).all(addDays(a, -1), addDays(b, 2));
+  return {
+    settings: getCalendarSettings(),
+    blocks: listBlocks({ from: start, to: end }),
+    tasks: withSubtasks(rows).map((t, i) => ({ ...t, projectId: rows[i].project_id, done: !!rows[i].done })),
+    projects: q('SELECT id, name, icon, color FROM projects WHERE archived = 0 ORDER BY position').all().map((r) => ({ ...r })),
+    booked: bookedMinutes(),
+  };
+}
+
+/**
+ * A suggested plan: open tasks' remaining estimates fitted into free working time between
+ * `from` and `to` (days; default today to the end of this week). `minPriority` keeps tasks
+ * of that priority or higher. Nothing is written.
+ */
+export function suggestSchedule({ from, to, projectId, minPriority, taskIds, now: at = Date.now() } = {}) {
+  const today = localDate(new Date(at));
+  const { a, b, start, end } = dayRange(from || today, to || addDays(weekStart(from || today), 6), { maxDays: 62 });
+  const tasks = plannableTasks({ projectId, minPriority, taskIds });
+  const settings = getCalendarSettings();
+  const plan = suggestPlan({
+    tasks,
+    booked: bookedMinutes(at),
+    week: settings.week,
+    occurrences: listBlocks({ from: start, to: end }),
+    from: start,
+    to: end,
+    now: at,
+    maxSession: settings.sessionMinutes,
+  });
+  const byId = new Map(tasks.map((t) => [t.id, t]));
+  const about = (id) => ({ taskId: id, title: byId.get(id).title, projectId: byId.get(id).projectId, priority: byId.get(id).priority });
+  return {
+    from: a,
+    to: b,
+    considered: tasks.length,
+    bookings: plan.bookings.map((x) => ({ ...x, ...about(x.taskId) })),
+    unplaced: plan.unplaced.map((x) => ({ ...x, ...about(x.taskId) })),
+    needsEstimate: plan.needsEstimate.map(about),
+  };
+}
+
 // ---------- settings ----------
 
 export const REMINDER_DEFAULTS = {
@@ -1224,6 +1572,9 @@ export const REMINDER_DEFAULTS = {
   leadMinutes: 60,
   overdue: true,
   morningTime: '09:00',
+  // calendar blocks (meetings and task time) remind shortly before they start
+  blocks: true,
+  blockLead: 10,
 };
 
 function getSetting(key, fallback) {
@@ -1242,11 +1593,16 @@ export function getReminderSettings() {
 export function updateReminderSettings(patch = {}) {
   return tx(() => {
     const next = { ...getReminderSettings() };
-    for (const k of ['enabled', 'dayBefore', 'morningOf', 'hourBefore', 'overdue']) if (patch[k] !== undefined) next[k] = !!patch[k];
+    for (const k of ['enabled', 'dayBefore', 'morningOf', 'hourBefore', 'overdue', 'blocks']) if (patch[k] !== undefined) next[k] = !!patch[k];
     if (patch.leadMinutes !== undefined) {
       const m = Math.round(Number(patch.leadMinutes));
       if (!(m >= 5 && m <= 24 * 60)) throw new AppError(400, 'leadMinutes must be between 5 and 1440');
       next.leadMinutes = m;
+    }
+    if (patch.blockLead !== undefined) {
+      const m = Math.round(Number(patch.blockLead));
+      if (!(m >= 1 && m <= 240)) throw new AppError(400, 'blockLead must be between 1 and 240');
+      next.blockLead = m;
     }
     if (patch.morningTime !== undefined) {
       if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(String(patch.morningTime))) throw new AppError(400, 'morningTime must be HH:MM');

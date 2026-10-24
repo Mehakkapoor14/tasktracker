@@ -8,9 +8,11 @@ import { TaskSheet } from './components/TaskSheet';
 import { ArchiveSheet } from './components/ArchiveSheet';
 import { ChatSheet } from './components/Chat';
 import { BoardTimeline } from './components/TimelineViews';
+import { CalendarPage, CalendarView } from './components/Calendar';
+import { useCalendar } from './calendar';
 import { TipProvider } from './components/ui';
 import Home from './components/Home';
-import { useProjectRoute } from './router';
+import { useCalendarRoute, useProjectRoute } from './router';
 import { showReminderFallback, syncThemeColor } from './pwa';
 import { isDarkTheme } from './themes';
 
@@ -24,7 +26,8 @@ export default function App() {
   const [archiveOpen, setArchiveOpen] = useState(false);
   const searchRef = useRef(null);
   const routeProjectId = useProjectRoute();
-  const onHome = routeProjectId == null;
+  const onCalendar = useCalendarRoute();
+  const onHome = routeProjectId == null && !onCalendar;
 
   // the URL decides what is on screen; "?task=12" (from a reminder) opens that task
   useEffect(() => {
@@ -49,7 +52,7 @@ export default function App() {
     return subscribe(
       () => {
         clearTimeout(t);
-        t = setTimeout(load, 120);
+        t = setTimeout(() => (load(), useCalendar.getState().refresh()), 120);
       },
       (reminder) => showReminderFallback(reminder)
     );
@@ -59,7 +62,7 @@ export default function App() {
     const onKey = (e) => {
       if (e.metaKey || e.ctrlKey || e.altKey || isTyping(document.activeElement)) return;
       const s = useBoard.getState();
-      if (s.selectedId != null || archiveOpen || document.querySelector('[role=dialog]')) return;
+      if (onCalendar || s.selectedId != null || archiveOpen || document.querySelector('[role=dialog]')) return;
       if (onHome) {
         if (e.key === 'n' || e.key === 'N') {
           e.preventDefault();
@@ -79,19 +82,23 @@ export default function App() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [archiveOpen, onHome]);
+  }, [archiveOpen, onHome, onCalendar]);
 
   const dark = isDarkTheme(theme);
 
   return (
     <TipProvider>
-      {onHome ? (
+      {onCalendar ? (
+        <CalendarPage />
+      ) : onHome ? (
         <Home />
       ) : (
         <>
           <div className="flex h-full flex-col">
             <TopBar ref={searchRef} onOpenArchive={() => setArchiveOpen(true)} />
-            <main className="min-h-0 flex-1">{!loaded ? <BoardSkeleton /> : view === 'timeline' ? <BoardTimeline /> : <Board />}</main>
+            <main className="min-h-0 flex-1">
+              {!loaded ? <BoardSkeleton /> : view === 'timeline' ? <BoardTimeline /> : view === 'calendar' ? <CalendarView projectId={project.id} /> : <Board />}
+            </main>
           </div>
           <TaskSheet />
           <ArchiveSheet open={archiveOpen} onOpenChange={setArchiveOpen} />

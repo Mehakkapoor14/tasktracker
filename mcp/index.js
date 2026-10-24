@@ -7,6 +7,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod';
 import * as store from '../server/db.js';
 import * as actions from '../server/actions.js';
+import { calendarContext } from '../server/chat.js';
 import { dueInfo, formatDuration } from '../shared/due.js';
 import { changeTags } from '../shared/tags.js';
 import { formatEstimate, formatHours, formatMoney, parseEstimate } from '../shared/estimate.js';
@@ -18,7 +19,8 @@ const server = new McpServer(
       "Task Tracker is the user's local task board. Read freely. By default the user approves changes: write tools then return a request id instead of changing the board, " +
       'and the change appears once the user taps Apply in the app. Batch related changes into as few calls as you can, tell the user what you asked for, ' +
       'and use get_request to see whether it was applied (and the ids of anything created). ' +
-      'Before working on a task for a while, call claim_task so the user and other agents see it is in progress; it expires on its own and is released when the task is done.',
+      'Before working on a task for a while, call claim_task so the user and other agents see it is in progress; it expires on its own and is released when the task is done. ' +
+      'The calendar (get_calendar) has the user’s working hours, meetings, booked task time and time off; use plan_time to fit tasks into free time rather than working out times yourself.',
   }
 );
 
@@ -70,7 +72,8 @@ const withNotes = (result, notes) => (notes.length ? { ...result, content: [...r
 /** Queue `list` (action objects) for approval and describe what's waiting. */
 function request(list) {
   const p = actions.propose({ agent: agentName(), actions: list, session: SESSION });
-  const lines = p.items.map((i) => `- ${i.ok ? '' : '(can’t do) '}${i.verb} ${i.summary}`);
+  // a plan's "Not planned" notes are information, not failed changes
+  const lines = p.items.map((i) => `- ${i.ok || i.verb === 'Not planned' ? '' : '(can’t do) '}${i.verb} ${i.summary}`);
   return text(
     `Waiting for the user's approval in Task Tracker (request ${p.id}):\n${lines.join('\n')}\n\nNothing has changed yet. Call get_request with id ${p.id} later to see whether it was applied.`
   );
@@ -547,7 +550,7 @@ server.registerTool(
     const p = store.getProposal(id);
     if (p.status === 'pending') return text(`Request ${p.id} is still waiting for the user's approval.`);
     if (p.status === 'dismissed') return text(`The user dismissed request ${p.id}. Nothing was changed.`);
-    const lines = p.result.applied.map((a) => `- ${a.verb} ${a.summary}${a.taskId ? ` → task #${a.taskId}` : ''}${a.projectId ? ` → project id ${a.projectId}` : ''}`);
+    const lines = p.result.applied.map((a) => `- ${a.verb} ${a.summary}${a.taskId ? ` → task #${a.taskId}` : ''}${a.projectId ? ` → project id ${a.projectId}` : ''}${a.blockId ? ` → block ${a.blockId}` : ''}`);
     const skipped = p.items.filter((i) => i.ok).length - p.result.applied.length;
     return text(`The user applied request ${p.id}:\n${lines.join('\n')}${skipped > 0 ? `\n(${skipped} change${skipped === 1 ? ' was' : 's were'} left out by the user)` : ''}`);
   })
@@ -583,6 +586,114 @@ server.registerTool(
         .map((c) => `- ${c.name} (id ${c.id})${c.isDone ? ' [done]' : ''}${c.hidden ? ' [hidden]' : ''}`)
         .join('\n')
     )
+  )
+);
+
+// ---------- calendar ----------
+
+const when = z.string().describe('Local time as YYYY-MM-DDTHH:MM (or an ISO datetime). For all-day blocks, a date YYYY-MM-DD.');
+const blockKind = z.enum(['busy', 'task', 'off']).describe('busy = meetings and appointments, task = time booked for a task, off = time off');
+
+server.registerTool(
+  'get_calendar',
+  {
+    title: 'Get calendar',
+    description:
+      "The user's working hours and calendar, day by day: blocks (meetings, booked task time, time off, with block ids), free time, and whether the estimated work that's due fits. Use before planning or booking time.",
+    inputSchema: { days: z.number().int().min(1).max(31).optional().describe('How many days from today (default 7)') },
+    annotations: { readOnlyHint: true },
+  },
+  tool(({ days }) => text(calendarContext({ days: days ?? 7 })))
+);
+
+server.registerTool(
+  'plan_time',
+  {
+    title: 'Plan tasks into free time',
+    description:
+      "Suggest a schedule: fits open tasks' remaining estimates into free working time between from and to, most important first (priority, then deadline), never after a deadline, " +
+      'in sessions no longer than the user’s setting. Each session becomes task time on the calendar once approved; it also says what didn’t fit and which tasks need an estimate.',
+    inputSchema: {
+      from: z.string().optional().describe('First day, YYYY-MM-DD (default today)'),
+      to: z.string().optional().describe('Last day, YYYY-MM-DD (default the end of this week)'),
+      priority: priority.optional().describe('Only tasks of this priority or higher, e.g. "high" includes urgent'),
+      project: projectRef.optional().describe('Only tasks in this project'),
+      tasks: z.array(z.coerce.number().int().positive()).optional().describe('Only these task ids'),
+    },
+  },
+  tool(({ from, to, priority, project, tasks }) => {
+    const list = [{ type: 'schedule_tasks', from, to, priority, project, tasks }];
+    return write(list, () => {
+      const { applied, notes } = actions.apply(list, { source: 'agent' });
+      return text([`Booked ${applied.length} session(s):`, ...applied.map((a) => `- ${a.summary} (block ${a.blockId})`), ...(notes || []).map((n) => `Not planned: ${n}`)].join('\n'));
+    });
+  })
+);
+
+server.registerTool(
+  'block_time',
+  {
+    title: 'Block time on the calendar',
+    description: 'Add a block: a meeting or appointment (busy), time to work on a task (task, with task_id), or time off (off). Blocks can repeat.',
+    inputSchema: {
+      kind: blockKind.optional().describe('Default: task when task_id is given, otherwise busy'),
+      title: z.string().optional(),
+      task_id: taskId.optional(),
+      start: when,
+      end: when.describe('End time (for all-day blocks the last day, included)'),
+      all_day: z.boolean().optional(),
+      repeat: repeatArg.optional(),
+      repeat_until: z.string().optional().describe('Last day a repeating block happens, YYYY-MM-DD'),
+      note: z.string().optional(),
+    },
+  },
+  tool(({ task_id, ...rest }) => {
+    const list = [{ type: 'create_block', task: task_id, ...rest }];
+    return write(list, () => {
+      const [a] = actions.apply(list, { source: 'agent' }).applied;
+      return text(`${a.verb}: ${a.summary} (block ${a.blockId})`);
+    });
+  })
+);
+
+server.registerTool(
+  'update_block',
+  {
+    title: 'Move or edit a calendar block',
+    description: 'Change a block’s time, title, kind, repeat or note. For a repeating block, occurrence picks one event (scope "one" changes only that one, "all" the whole series).',
+    inputSchema: {
+      id: z.coerce.number().int().positive().describe('Block id, from get_calendar'),
+      occurrence: z.string().optional().describe('The day (YYYY-MM-DD) of the event of a repeating block'),
+      scope: z.enum(['one', 'all']).optional(),
+      title: z.string().optional(),
+      kind: blockKind.optional(),
+      start: when.optional(),
+      end: when.optional(),
+      repeat: repeatArg.optional(),
+      note: z.string().optional(),
+    },
+  },
+  tool(({ id, ...rest }) =>
+    write([{ type: 'update_block', block: id, ...rest }], () => {
+      const [a] = actions.apply([{ type: 'update_block', block: id, ...rest }], { source: 'agent' }).applied;
+      return text(`${a.verb}: ${a.summary}`);
+    })
+  )
+);
+
+server.registerTool(
+  'delete_block',
+  {
+    title: 'Remove a calendar block',
+    description: 'Remove a block. For a repeating block, pass occurrence (YYYY-MM-DD) to remove just that event.',
+    inputSchema: { id: z.coerce.number().int().positive(), occurrence: z.string().optional() },
+    annotations: { destructiveHint: true },
+  },
+  tool(({ id, occurrence }) =>
+    write([{ type: 'delete_block', block: id, occurrence }], () => {
+      const [a] = actions.apply([{ type: 'delete_block', block: id, occurrence }], { source: 'agent' }).applied;
+      return text(`Removed ${a.summary}.`);
+    })
   )
 );
 

@@ -15,8 +15,8 @@ const PRESETS = [
 ];
 
 const SUGGESTIONS = {
-  home: ['What should I focus on today?', 'What is due this week across my projects?', 'Which project needs the most attention?'],
-  project: ['Summarize this project', 'What is overdue or due soon here?', 'What should I work on next?'],
+  home: ['What should I focus on today?', 'Fit my high-priority tasks into my free time this week', 'Which project needs the most attention?'],
+  project: ['Summarize this project', 'Fit this project’s high-priority tasks into my free time this week', 'What should I work on next?'],
 };
 
 // Errors from this app's own server already read as plain sentences. Anything else
@@ -185,8 +185,9 @@ export const useChat = create((set, get) => ({
     if (!actions) return;
     patch({ status: 'checking', actions });
     try {
-      const { items } = await request('POST', '/api/chat/actions/preview', { actions });
-      patch({ status: 'pending', items, selected: items.map((it) => it.ok) });
+      // a suggested plan comes back as its separate bookings, each one to tick
+      const reviewed = await request('POST', '/api/chat/actions/preview', { actions });
+      patch({ status: 'pending', items: reviewed.items, actions: reviewed.actions || actions, selected: reviewed.items.map((it) => it.ok) });
     } catch (err) {
       patch({ status: 'invalid', error: err.message });
     }

@@ -126,7 +126,7 @@ export function RemindersButton() {
       </Tip>
       <PopoverContent className="w-[340px] p-4">
         <div className="flex items-center gap-2">
-          <h3 className="font-display flex-1 text-[16px] text-fg">Deadline reminders</h3>
+          <h3 className="font-display flex-1 text-[16px] text-fg">Reminders</h3>
           {settings && <Switch label="Reminders on" checked={settings.enabled} onChange={(v) => patch({ enabled: v })} />}
         </div>
 
@@ -174,6 +174,22 @@ export function RemindersButton() {
             </Row>
             <Row title="When it becomes overdue">
               <Switch label="When overdue" checked={settings.overdue} onChange={(v) => patch({ overdue: v })} />
+            </Row>
+            <Row title="Before calendar blocks" hint="Meetings and booked task time">
+              <select
+                aria-label="How long before a block"
+                value={settings.blockLead}
+                disabled={!settings.blocks}
+                onChange={(e) => patch({ blockLead: Number(e.target.value) })}
+                className="h-7 rounded-md border border-line bg-card px-1.5 text-[12px] outline-none focus:border-accent disabled:opacity-40"
+              >
+                {[5, 10, 15, 30].map((m) => (
+                  <option key={m} value={m}>
+                    {m} min
+                  </option>
+                ))}
+              </select>
+              <Switch label="Before calendar blocks" checked={settings.blocks} onChange={(v) => patch({ blocks: v })} />
             </Row>
             <Row title="Morning reminders at">
               <input

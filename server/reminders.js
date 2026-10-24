@@ -71,6 +71,29 @@ export function message({ task, kind }, now = new Date()) {
   };
 }
 
+// ---------- calendar blocks ----------
+
+/** Meetings and task time starting within `blockLead` minutes (time off and all-day blocks never remind). */
+export function blockReminders(occurrences, settings, now = new Date()) {
+  if (!settings.enabled || !settings.blocks) return [];
+  const lead = settings.blockLead * 60000;
+  // a minute of slack for the once-a-minute check; after that the moment has passed
+  return occurrences.filter((o) => !o.allDay && o.kind !== 'off' && o.start - lead <= now && now < o.start + 60000);
+}
+
+export function blockMessage(o, now = new Date()) {
+  const time = (ms) => new Date(ms).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+  const name = o.kind === 'task' ? o.task?.title || 'Task time' : o.title || 'Busy';
+  const when = o.start <= now ? 'Starting now' : `Starts in ${timeLeft(o.start - now)}`;
+  const project = o.kind === 'task' && o.task ? store.getProject(o.task.projectId) : null;
+  return {
+    title: `${when} · ${name}`,
+    body: `${time(o.start)} – ${time(o.end)}${project ? ` · ${project.icon} ${project.name}` : o.kind === 'task' ? ' · Task time' : ''}`,
+    tag: `block-${o.key}`,
+    url: o.kind === 'task' && o.task ? `/p/${o.task.projectId}?task=${o.task.id}` : '/calendar',
+  };
+}
+
 /**
  * @param {{ broadcast: (event: string, data: object) => void }} opts
  * @returns {{ test: () => Promise<object>, publicKey: string, stop: () => void }}
@@ -98,6 +121,10 @@ export function startReminders({ broadcast }) {
     try {
       const settings = store.getReminderSettings();
       const fresh = dueReminders(store.reminderCandidates(), settings).filter((r) => store.markReminderSent(r.task.id, r.kind, r.task.due_at));
+      // calendar blocks share the sent log: block id, kind 'block', and the occurrence's start
+      const now = Date.now();
+      const soon = store.listBlocks({ from: now - 120000, to: now + settings.blockLead * 60000 + 60000 });
+      for (const o of blockReminders(soon, settings, now)) if (store.markReminderSent(o.blockId, 'block', o.startAt)) await deliver(blockMessage(o, now));
       if (fresh.length > 3) {
         // a burst (e.g. after the laptop wakes) becomes one calm summary instead of a flood
         await deliver({

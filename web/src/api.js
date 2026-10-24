@@ -49,6 +49,15 @@ export const api = {
   updateAgentSettings: (patch) => request('PATCH', '/api/settings/agents', patch),
   updateTag: (id, patch) => request('PATCH', `/api/tags/${id}`, patch),
   deleteTag: (id) => request('DELETE', `/api/tags/${id}`),
+
+  calendar: (from, to) => request('GET', `/api/calendar?from=${from}&to=${to}`),
+  updateCalendarSettings: (patch) => request('PATCH', '/api/settings/calendar', patch),
+  suggestPlan: (body) => request('POST', '/api/calendar/suggest', body),
+  createBlock: (body) => request('POST', '/api/blocks', body),
+  createBlocks: (blocks) => request('POST', '/api/blocks/batch', { blocks }),
+  // `occurrence` picks one event of a repeating block; scope 'all' changes the series
+  updateBlock: (id, patch, occurrence, scope) => request('PATCH', `/api/blocks/${id}${occurrence ? `?occurrence=${occurrence}&scope=${scope || 'one'}` : ''}`, patch),
+  deleteBlock: (id, occurrence) => request('DELETE', `/api/blocks/${id}${occurrence ? `?occurrence=${occurrence}` : ''}`),
 };
 
 /** Subscribe to server-sent change events. Calls `onChange` for changes made elsewhere. */

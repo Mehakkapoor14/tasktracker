@@ -112,7 +112,8 @@ app.post('/api/chat/speech', async (req, reply) => {
 });
 
 // changes proposed by the assistant: describe them for approval, then apply the approved ones
-app.post('/api/chat/actions/preview', async (req) => ({ items: actions.preview(req.body?.actions) }));
+// a suggested plan comes back as the separate bookings it makes, so each can be ticked
+app.post('/api/chat/actions/preview', async (req) => actions.review(req.body?.actions));
 app.post('/api/chat/actions/apply', async (req) => actions.apply(req.body?.actions));
 
 // requests from agents (MCP) waiting for the user, and whether agents must ask first
@@ -182,6 +183,22 @@ app.post('/api/tasks/:id/complete', async (req) => store.completeTask(id(req)));
 app.post('/api/tasks/:id/timer/start', async (req) => store.startTimer(id(req)));
 app.post('/api/tasks/:id/timer/stop', async (req) => store.stopTimer(id(req)));
 app.post('/api/tasks/:id/subtasks', async (req, reply) => reply.code(201).send(store.addSubtask(id(req), req.body?.title)));
+
+// ---------- calendar ----------
+
+app.get('/api/calendar', async (req) => store.calendar({ from: req.query.from, to: req.query.to }));
+app.get('/api/settings/calendar', async () => store.getCalendarSettings());
+app.patch('/api/settings/calendar', async (req) => store.updateCalendarSettings(req.body));
+// a suggested plan for free time; nothing is written until its blocks are created
+app.post('/api/calendar/suggest', async (req) => {
+  const { from, to, projectId, minPriority, taskIds } = req.body || {};
+  return store.suggestSchedule({ from, to, projectId, minPriority, taskIds });
+});
+app.post('/api/blocks', async (req, reply) => reply.code(201).send(store.createBlock(req.body)));
+app.post('/api/blocks/batch', async (req, reply) => reply.code(201).send(store.createBlocks(req.body?.blocks)));
+// ?occurrence=YYYY-MM-DD targets one event of a repeating block; &scope=all changes the whole series
+app.patch('/api/blocks/:id', async (req) => store.updateBlock(id(req), req.body, { occurrence: req.query.occurrence, scope: req.query.scope }));
+app.delete('/api/blocks/:id', async (req) => store.deleteBlock(id(req), { occurrence: req.query.occurrence }));
 
 app.patch('/api/subtasks/:id', async (req) => store.updateSubtask(id(req), req.body));
 app.delete('/api/subtasks/:id', async (req) => store.deleteSubtask(id(req)));

@@ -8,8 +8,11 @@ import { dueInfo } from '../shared/due.js';
 import { changeTags } from '../shared/tags.js';
 import { formatEstimate, formatMoney, parseEstimate, sizeOf } from '../shared/estimate.js';
 import { parseRepeat, REPEATS } from '../shared/repeat.js';
+import { BLOCK_KINDS, formatMinutes, spanLabel } from '../shared/calendar.js';
 
 export const MAX_ACTIONS = 20;
+// a plan (schedule_tasks) turns into one booking per session, so it may become more than MAX_ACTIONS
+const MAX_BOOKINGS = 40;
 
 const PRIORITY_ALIASES = { med: 'medium', normal: 'medium', crit: 'urgent', critical: 'urgent', '': 'none' };
 const norm = (s) => String(s).toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -149,7 +152,7 @@ function resolveProjectRef(ref) {
   }
 }
 
-const AGENT_ONLY = new Set(['delete_subtask']);
+const AGENT_ONLY = new Set(['delete_subtask', 'delete_block']);
 
 function subtaskRef(ref) {
   const id = Number(ref);
@@ -160,6 +163,51 @@ function subtaskRef(ref) {
   }
   return fail(`Subtask ${id} doesn’t exist.`);
 }
+
+function blockRef(ref) {
+  const id = Number(String(ref ?? '').replace(/^#/, ''));
+  if (!Number.isInteger(id) || id <= 0) fail('It didn’t say which calendar block to change.');
+  try {
+    return store.getBlock(id);
+  } catch {
+    return fail(`Calendar block ${id} doesn’t exist.`);
+  }
+}
+
+const BLOCK_VERBS = { busy: 'Block time', task: 'Book time', off: 'Time off' };
+
+/** The data layer's message, as a plain-language failure. */
+function checked(fn) {
+  try {
+    return fn();
+  } catch (err) {
+    if (!(err instanceof store.AppError)) throw err;
+    return fail(`${err.message.replace(/\.$/, '')}.`);
+  }
+}
+
+/** A block's fields from an action, in the data layer's names (only those given). */
+function blockFields(a) {
+  const out = {};
+  if (a.kind !== undefined) {
+    const k = norm(a.kind);
+    const kind = { meeting: 'busy', busy: 'busy', event: 'busy', task: 'task', tasktime: 'task', focus: 'task', off: 'off', timeoff: 'off', holiday: 'off', vacation: 'off' }[k];
+    if (!kind) fail(`“${a.kind}” isn’t a kind of block. Use busy (meetings), task (task time) or off (time off).`);
+    out.kind = kind;
+  }
+  if (a.task !== undefined && a.task !== null && a.task !== '') out.taskId = taskRef(a.task).id;
+  if (a.title !== undefined) out.title = text(a.title, 'block title', { max: 200 }) ?? '';
+  if (a.note !== undefined) out.note = text(a.note, 'block note', { max: 2000 }) ?? '';
+  if (a.all_day !== undefined) out.allDay = !!a.all_day;
+  if (a.start !== undefined) out.startAt = a.start;
+  if (a.end !== undefined) out.endAt = a.end;
+  if (a.repeat !== undefined) out.repeat = repeat(a.repeat) || null;
+  if (a.repeat_until !== undefined) out.repeatUntil = a.repeat_until || null;
+  return out;
+}
+
+const blockName = (v) => (v.kind === 'task' ? label(store.getTask(v.taskId)) : `“${v.title || BLOCK_KINDS[v.kind].label}”`);
+const blockExtras = (v) => [v.repeat && repeatWords(v.repeat), v.repeat && v.repeatUntil && `until ${dayLabel(v.repeatUntil)}`].filter(Boolean);
 
 /**
  * Validates one action and returns { verb, summary, run }. Throws AppError with a
@@ -378,28 +426,112 @@ function plan(a, source = 'chat') {
       return { verb: 'Edit project', summary: `${project.icon} ${project.name}: ${changes.join(', ')}`, run: () => store.updateProject(project.id, patch) };
     }
 
+    case 'create_block': {
+      const fields = blockFields(a);
+      // a bare date means an all-day block (time off, usually)
+      if (fields.allDay === undefined && /^\d{4}-\d{2}-\d{2}$/.test(String(a.start ?? '').trim())) fields.allDay = true;
+      if (fields.kind === undefined) fields.kind = fields.taskId ? 'task' : 'busy';
+      const v = checked(() => store.checkBlock(fields));
+      const extras = blockExtras(v);
+      return {
+        verb: BLOCK_VERBS[v.kind],
+        summary: `${blockName(v)} · ${spanLabel(v)}${v.allDay ? '' : ` (${formatMinutes((Date.parse(v.endAt) - Date.parse(v.startAt)) / 60000)})`}${extras.length ? ` · ${extras.join(' · ')}` : ''}`,
+        run: () => store.createBlock(v),
+      };
+    }
+
+    case 'update_block': {
+      const b = blockRef(a.block);
+      const fields = blockFields(a);
+      const opts = { occurrence: a.occurrence || undefined, scope: a.scope === 'all' ? 'all' : 'one' };
+      const v = checked(() => store.checkBlockUpdate(b.id, fields, opts));
+      const changes = [];
+      const moved = v.startAt !== b.startAt || v.endAt !== b.endAt || v.allDay !== b.allDay || !!opts.occurrence;
+      if (moved) changes.push(`→ ${spanLabel(v)}`);
+      if (v.title !== b.title) changes.push(v.title ? `title → “${v.title}”` : 'clear title');
+      if (v.kind !== b.kind) changes.push(`→ ${BLOCK_KINDS[v.kind].label.toLowerCase()}`);
+      if ((v.repeat || null) !== b.repeat && !(opts.occurrence && opts.scope === 'one')) changes.push(v.repeat ? `repeat ${repeatWords(v.repeat)}` : 'stop repeating');
+      if (v.note !== b.note) changes.push(v.note ? 'new note' : 'clear note');
+      if (!changes.length) fail(`${blockName(b)} already looks like that.`);
+      const which = opts.occurrence && b.repeat ? (opts.scope === 'all' ? ' (every one)' : ` (only on ${dayLabel(opts.occurrence)})`) : '';
+      return { verb: moved && changes.length === 1 ? 'Move block' : 'Edit block', summary: `${blockName(b)}${which}: ${changes.join(', ')}`, run: () => store.updateBlock(b.id, fields, opts) };
+    }
+
+    case 'delete_block': {
+      const b = blockRef(a.block);
+      const one = a.occurrence && b.repeat;
+      return {
+        verb: 'Remove block',
+        summary: `${blockName(b)}${one ? ` on ${dayLabel(String(a.occurrence).slice(0, 10))} only` : ` · ${spanLabel(b)}${b.repeat ? ` and every repeat` : ''}`}`,
+        run: () => store.deleteBlock(b.id, { occurrence: one ? a.occurrence : undefined }),
+      };
+    }
+
+    // what a plan couldn't fit: shown on the approval card, never applied
+    case 'schedule_note':
+      throw Object.assign(new store.AppError(400, String(a.text || 'Part of the plan didn’t fit.')), { verb: 'Not planned' });
+
     default:
       return fail(a.type ? `“${a.type}” isn’t something ${source === 'chat' ? 'the assistant' : 'Task Tracker'} can do.` : 'This change couldn’t be read.');
   }
 }
 
-function checkList(actions) {
+function checkList(actions, limit = MAX_ACTIONS) {
   if (!Array.isArray(actions) || !actions.length) fail('There are no changes to review.');
-  if (actions.length > MAX_ACTIONS) fail(`That’s too many changes at once (the limit is ${MAX_ACTIONS}).`);
+  if (actions.length > limit) fail(`That’s too many changes at once (the limit is ${limit}).`);
 }
 
-/** Describe each proposed action without changing anything. */
-export function preview(actions, { source = 'chat' } = {}) {
-  checkList(actions);
-  return actions.map((a) => {
+/** The bookings a schedule_tasks request suggests, plus notes on anything that didn't fit. */
+function planActions(a) {
+  let plan;
+  try {
+    const project = a.project != null && a.project !== '' ? resolveProjectRef(a.project) : null;
+    const taskIds = a.tasks == null ? undefined : (Array.isArray(a.tasks) ? a.tasks : [a.tasks]).map((t) => taskRef(t).id);
+    const min = a.priority == null || a.priority === '' ? undefined : priority(a.priority);
+    plan = store.suggestSchedule({ from: a.from || undefined, to: a.to || undefined, projectId: project?.id, minPriority: min === 'none' ? undefined : min, taskIds });
+  } catch (err) {
+    if (!(err instanceof store.AppError)) throw err;
+    return [{ type: 'schedule_note', text: err.message }];
+  }
+  const out = plan.bookings.slice(0, MAX_BOOKINGS).map((b) => ({ type: 'create_block', kind: 'task', task: b.taskId, start: b.start, end: b.end }));
+  if (plan.bookings.length > MAX_BOOKINGS) out.push({ type: 'schedule_note', text: `…and ${plan.bookings.length - MAX_BOOKINGS} more sessions. Plan a shorter stretch to see them all.` });
+  for (const u of plan.unplaced) {
+    out.push({ type: 'schedule_note', text: `#${u.taskId} ${u.title}: ${formatMinutes(u.minutes)} ${u.reason === 'deadline' ? 'doesn’t fit before its deadline' : 'doesn’t fit in the free time'}` });
+  }
+  if (plan.needsEstimate.length) out.push({ type: 'schedule_note', text: `No estimate, so not planned: ${plan.needsEstimate.map((t) => `#${t.taskId} ${t.title}`).join(', ')}` });
+  if (!out.length) {
+    out.push({ type: 'schedule_note', text: plan.considered ? 'Everything that matches is already booked or tracked.' : 'No open tasks match, so there’s nothing to plan.' });
+  }
+  return out;
+}
+
+/** Replace schedule_tasks requests with the bookings they suggest, so each can be reviewed. */
+export function expand(actions, limit = MAX_ACTIONS) {
+  checkList(actions, limit);
+  return actions.flatMap((a) => (a?.type === 'schedule_tasks' ? planActions(a) : [a]));
+}
+
+function describe(list, source) {
+  return list.map((a) => {
     try {
       const { verb, summary } = plan(a, source);
       return { ok: true, verb, summary };
     } catch (err) {
       if (!(err instanceof store.AppError)) throw err;
-      return { ok: false, verb: 'Can’t do', summary: err.message };
+      return { ok: false, verb: err.verb || 'Can’t do', summary: err.message };
     }
   });
+}
+
+/** Describe each proposed action without changing anything. */
+export function preview(actions, { source = 'chat' } = {}) {
+  return review(actions, { source }).items;
+}
+
+/** Like preview, plus the actions as they'll be applied (a plan becomes its bookings). */
+export function review(actions, { source = 'chat' } = {}) {
+  const list = expand(actions);
+  return { items: describe(list, source), actions: list };
 }
 
 /** What an applied change created or touched, so an agent can refer to it afterwards. */
@@ -407,16 +539,21 @@ function refOf(value) {
   if (!value || typeof value !== 'object') return undefined;
   if ('columnId' in value) return { taskId: value.id };
   if ('icon' in value && 'archived' in value) return { projectId: value.id };
+  if ('kind' in value && 'startAt' in value) return { blockId: value.id };
   return undefined;
 }
 
 /** Apply approved actions, all or nothing. Later actions see the effects of earlier ones. */
 export function apply(actions, { source = 'chat' } = {}) {
-  checkList(actions);
+  // approved plans arrive already expanded into their bookings
+  const list = expand(actions, MAX_ACTIONS + MAX_BOOKINGS + 10);
+  const notes = list.filter((a) => a?.type === 'schedule_note');
+  const runs = list.filter((a) => a?.type !== 'schedule_note');
+  if (!runs.length) fail(notes.map((n) => n.text).join(' ') || 'There are no changes to apply.');
   const done = [];
   try {
     store.transaction(() => {
-      for (const a of actions) {
+      for (const a of runs) {
         const step = plan(a, source);
         const value = step.run();
         done.push({ verb: step.verb, summary: step.summary, ...refOf(value) });
@@ -426,7 +563,7 @@ export function apply(actions, { source = 'chat' } = {}) {
     if (!(err instanceof store.AppError)) throw err;
     throw new store.AppError(400, `Nothing was changed. ${err.message}`);
   }
-  return { applied: done };
+  return notes.length ? { applied: done, notes: notes.map((n) => n.text) } : { applied: done };
 }
 
 // ---------- agent requests ("ask me first") ----------
@@ -447,6 +584,7 @@ const FIELD_NAMES = {
   subtask: 'subtask',
   name: 'name',
   icon: 'icon',
+  block: 'calendar block',
 };
 
 /** The task an action works on, if any (for claims and conflict checks). */
@@ -496,6 +634,11 @@ function basisOf(a) {
         const sub = t || taskRef(a.task).subtasks.find((s) => norm(s.title).includes(norm(a.subtask || '')));
         return sub ? { subtask: `${sub.title}\u0000${sub.done}` } : null;
       }
+      case 'update_block':
+      case 'delete_block': {
+        const b = blockRef(a.block);
+        return { block: [b.kind, b.title, b.startAt, b.endAt, b.allDay, b.repeat, b.skips.join(',')].join('\u0000') };
+      }
       case 'update_project':
       case 'tag_project': {
         const p = resolveProjectRef(a.project);
@@ -515,9 +658,9 @@ function basisOf(a) {
 
 /** Queue an agent's changes for approval. Throws if none of them could be applied. */
 export function propose({ agent, actions, session = null }) {
-  const items = preview(actions, { source: 'agent' });
+  const { items, actions: list } = review(actions, { source: 'agent' });
   if (!items.some((i) => i.ok)) fail(items.map((i) => i.summary).join(' '));
-  return store.createProposal({ agent, actions, items, session, basis: actions.map(basisOf) });
+  return store.createProposal({ agent, actions: list, items, session, basis: list.map(basisOf) });
 }
 
 /**
