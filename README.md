@@ -12,7 +12,7 @@
 Claude and Cursor plan and update tasks over MCP. **Agents propose, you approve**: every change waits for one tap.<br />
 Working with agents stays low-effort: one calm board, changes in plain words, nothing leaving your machine.
 
-[![MCP](https://img.shields.io/badge/MCP-21_tools-8a63d2)](#-work-with-your-ai-agents-mcp)
+[![MCP](https://img.shields.io/badge/MCP-26_tools-8a63d2)](#-work-with-your-ai-agents-mcp)
 [![Local-first](https://img.shields.io/badge/local--first-one_SQLite_file-0f80cc?logo=sqlite&logoColor=white)](#-who-its-for)
 [![AI](https://img.shields.io/badge/assistant-chat_%C2%B7_voice_%C2%B7_approvals-10a37f)](#-the-built-in-assistant)
 [![Node](https://img.shields.io/badge/node-%E2%89%A522.13-3c873a?logo=node.js&logoColor=white)](https://nodejs.org)
@@ -34,7 +34,7 @@ Working with agents stays low-effort: one calm board, changes in plain words, no
 <td width="33%" valign="top">
 
 ### 🤖 Agents work on your board
-Claude Code, Cursor and any MCP client get **21 tools** to plan work, break it into subtasks, log progress and finish tasks, through the same rules you use.
+Claude Code, Cursor and any MCP client get **26 tools** to plan work, book time on your calendar, break it into subtasks, log progress and finish tasks, through the same rules you use.
 
 </td>
 <td width="33%" valign="top">
@@ -123,9 +123,10 @@ Then just ask:
 > *"What's overdue across all my projects?"*
 > *"Break task #3 into subtasks, tag it #backend and move it to In Progress."*
 > *"Log what you just did on #12 and mark it complete."*
+> *"Fit my high-priority tasks into my free time this week."*
 
 <details>
-<summary><b>All 21 MCP tools</b></summary>
+<summary><b>All 26 MCP tools</b></summary>
 
 | Tool | What it does |
 | --- | --- |
@@ -150,6 +151,11 @@ Then just ask:
 | `get_request` | Whether a change request was approved, and the ids of anything it created |
 | `claim_task` | Mark a task as being worked on (a lease, not a lock; see below) |
 | `release_task` | Remove your "working on it" marker |
+| `get_calendar` | Working hours, blocks (with ids), free time per day, and whether the work due fits |
+| `plan_time` | Suggest a schedule: fits open tasks' remaining estimates into free time (`priority`, `project`, `tasks`, `from`/`to`). Each session is reviewed before it's booked |
+| `block_time` | Add a meeting (`busy`), task time (`task`, with `task_id`) or time off (`off`); can repeat |
+| `update_block` | Move or edit a block; for a repeating one, `occurrence` with `scope: "one"` or `"all"` |
+| `delete_block` | Remove a block, or one `occurrence` of a repeating one |
 
 </details>
 
@@ -260,6 +266,22 @@ Switch any board to **Timeline**. It's a Gantt chart without the clutter:
 
 On the home page, switch **Projects** to **Timeline** to see every project at once: one row each, with a ◆ for every deadline, so busy weeks stand out. Expand a project to see and reschedule its tasks right there.
 
+### 📅 Calendar: block your time, then plan into what's free
+
+<img src="docs/screenshots/calendar-plan.png" alt="The week view with working hours, a repeating standup, a client meeting and a day off, and a suggested plan shown as dashed sessions waiting to be booked" width="100%" />
+
+Open **Calendar** from the home page (every project) or a board's **Board · Timeline · Calendar** switch (that project's tasks). Day, week and month views.
+
+- **Working hours** for each day, with breaks (presets like *Mon–Fri 9–6, lunch 1–2*). Time outside them is shaded, and plans only use them.
+- **Block time**: drag across empty time for a meeting or appointment, double-click the all-day row for time off. Drag a block to move it, pull its bottom edge to resize it. Blocks can repeat (every weekday, every week…) until a date; change or delete just one event, or the whole series.
+- **Book time for a task**: drag it from **To plan** onto the calendar. It books what's left of its estimate (estimate − tracked − already booked), up to one session.
+- **See what fits**: every day shows its free time; when more estimated work is due by a day than you have free time before it, the day says how much it's over.
+- ✨ **Plan my week**: fits what's left of your tasks into free working time, most important first (priority, then deadline), never before a start date or after a deadline, in sessions of at most 2 hours (adjustable). The plan shows dashed; click a session to leave it out, then **Book**. It also says what didn't fit and which tasks need an estimate.
+- **Ask the assistant** *"fit my high-priority tasks into my free time this week"*, *"block 2–3pm tomorrow for the dentist"* or *"I'm off next Friday"*. Every booking appears on the approval card.
+- **Reminders** a few minutes before meetings and task time (on by default, 5–30 min).
+
+Your calendar lives in the same local database as your tasks. It doesn't sync with Google or Apple calendars.
+
 ### 📋 A board that adapts to you
 
 <img src="docs/screenshots/board-paper.png" alt="A project board in the Paper theme with tags, priorities, deadlines and subtask progress" width="100%" />
@@ -350,6 +372,7 @@ Task Tracker is a **Progressive Web App**: click **Install** in the top bar (Chr
 | The morning it's due | at your morning time | on/off |
 | Before a due time | for tasks with a time, e.g. 1 hour before | on/off, 15 min to 1 day |
 | When it becomes overdue | at the due time, or the next morning for all-day tasks | on/off |
+| Before a calendar block | before meetings and booked task time | on/off, 5 to 30 min |
 
 - **Works with the app closed**: the local server sends reminders through the browser's push service, signed with keys generated on your machine. No account needed.
 - **Calm by design**: each reminder fires once, done tasks never remind you, and a burst (say, after your laptop wakes) arrives as one summary.
@@ -384,7 +407,7 @@ flowchart LR
         direction TB
         API["⚡ <b>Fastify API</b><br/><small>server/index.js · REST + SSE</small>"]
         CHAT["✨ <b>Assistant</b><br/><small>chat.js · actions.js · voice</small>"]
-        MCP["🔌 <b>MCP Server</b><br/><small>mcp/index.js · 21 tools</small>"]
+        MCP["🔌 <b>MCP Server</b><br/><small>mcp/index.js · 26 tools</small>"]
         CORE["🧠 <b>Shared data layer</b><br/><small>server/db.js · rules &amp; validation</small>"]
         WATCH["👀 <b>Change watcher</b><br/><small>PRAGMA data_version</small>"]
     end
@@ -587,6 +610,7 @@ The AI provider (and optional voice models) is configured in the app (✨ → se
 Task Tracker is young and moving fast. Here's where it's heading, and **every item is open for contributors**. Comment on an issue (or open one) to claim it.
 
 ### ✅ Recently shipped
+- 📅 **Calendar**: working hours, meetings, time off and booked task time, with *Plan my week* and the assistant fitting tasks into free time
 - 🔁 **Repeating tasks**: daily to yearly, with the next one added when you finish
 - 📦 **Move tasks between projects**, from the task panel or by an agent
 - ↕️ **Sort the home page by priority**, drag-to-reorder subtasks, and **hold Space to talk**
@@ -626,7 +650,6 @@ Task Tracker is young and moving fast. Here's where it's heading, and **every it
 | 🔗 **Task dependencies**: "blocked by #12", drawn as links on the timeline | 🧪 Exploring |
 | 🔁 **Custom repeats**: "every 3 days", "every Mon and Thu", or ending after N times | 🙋 Help wanted |
 | 💾 **Saved filters**: a tag + deadline + search combination one click away | 🙋 Help wanted |
-| 🗓️ **Calendar view**: a month grid of deadlines | 🙋 Help wanted |
 | 🍅 **Focus mode**: one task, a Pomodoro timer, everything else hidden | 🙋 Help wanted |
 | 📄 **Task templates** for repeatable checklists | 🙋 Help wanted |
 

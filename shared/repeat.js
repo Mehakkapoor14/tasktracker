@@ -42,7 +42,7 @@ function addMonths(d, n) {
 }
 
 /** One step on, in local time (so a 9:00 deadline stays at 9:00 across daylight-saving changes). */
-function step(date, repeat) {
+export function step(date, repeat) {
   const d = new Date(date);
   if (repeat === 'daily') d.setDate(d.getDate() + 1);
   else if (repeat === 'weekdays') do d.setDate(d.getDate() + 1); while (d.getDay() === 0 || d.getDay() === 6);

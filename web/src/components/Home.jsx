@@ -9,6 +9,7 @@ import {
   ArrowLeft,
   ArrowRight,
   CalendarClock,
+  CalendarDays,
   Check,
   CheckCircle2,
   ChevronDown,
@@ -24,7 +25,7 @@ import {
   Trash2,
 } from 'lucide-react';
 import { useBoard } from '../store';
-import { navigate, projectPath } from '../router';
+import { CALENDAR_PATH, navigate, projectPath } from '../router';
 import { COLUMN_COLORS } from '../themes';
 import { DueChip } from './Due';
 import { Logo, ThemePicker } from './TopBar';
@@ -125,6 +126,9 @@ export default function Home() {
           <Logo />
           <span className="font-display text-[20px] text-fg">Task Tracker</span>
           <div className="ml-auto flex items-center gap-2">
+            <Button variant="ghost" onClick={() => navigate(CALENDAR_PATH)}>
+              <CalendarDays className="size-4" /> <span className="hidden sm:inline">Calendar</span>
+            </Button>
             <AgentInboxButton />
             <ChatButton />
             <RemindersButton />

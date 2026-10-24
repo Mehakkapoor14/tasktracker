@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- 📅 **Calendar:** day, week and month views of your time, for every project (home page → Calendar) or one (a board's Calendar view). Set **working hours** per day with breaks; **block time** for meetings and appointments by dragging, add **time off**, and drag tasks from *To plan* to **book time** for them. Blocks repeat, and one event of a series can be moved, renamed or removed on its own.
+- 📊 **What fits:** each day shows its free time, and flags when more estimated work is due by then than there's time for.
+- ✨ **Plan my week:** fits what's left of your tasks' estimates into free working time, most important first and before deadlines, in sessions of up to 2h (adjustable). Review the dashed plan, leave sessions out, then book it.
+- 🤖 **The assistant and agents plan too:** ask *"fit my high-priority tasks into my free time this week"* and each suggested session appears on the approval card. Five new MCP tools: `get_calendar`, `plan_time`, `block_time`, `update_block`, `delete_block`.
+- 🔔 Reminders shortly before meetings and booked task time.
 - ⏱️ **Estimates:** size tasks XS–XL (30m to 3d) or set an exact amount; see tracked time against it, with an amber hint when over. Totals on column headers and project cards. Quick add: `~2h`, `~M`.
 - 💰 **Cost:** an optional hourly rate and currency per project turns estimates and tracked time into cost. Hidden unless a rate is set.
 - 📝 **Markdown notes:** formatted by default, click to write, tickable checklists, tables and code, ` ```mermaid ` diagrams, and an expanded side-by-side writer.

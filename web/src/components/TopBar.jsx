@@ -1,5 +1,5 @@
 import { forwardRef, useMemo, useState } from 'react';
-import { Archive, Check, ChevronDown, Eye, EyeOff, GanttChart, LayoutGrid, Paintbrush, Plus, Search, SquareKanban, X } from 'lucide-react';
+import { Archive, CalendarDays, Check, ChevronDown, Eye, EyeOff, GanttChart, LayoutGrid, Paintbrush, Plus, Search, SquareKanban, X } from 'lucide-react';
 import { dueInfo } from '../../../shared/due.js';
 import { useBoard } from '../store';
 import { THEMES } from '../themes';
@@ -68,6 +68,7 @@ export const TopBar = forwardRef(function TopBar({ onOpenArchive }, searchRef) {
           {[
             ['board', 'Board', SquareKanban],
             ['timeline', 'Timeline', GanttChart],
+            ['calendar', 'Calendar', CalendarDays],
           ].map(([key, label, Icon]) => (
             <button
               key={key}
@@ -82,56 +83,61 @@ export const TopBar = forwardRef(function TopBar({ onOpenArchive }, searchRef) {
           ))}
         </div>
 
-        {/* icon-only until used: click or press / to expand; searches every field of every task */}
-        <label
-          title="Search everything (/)"
-          className={cx(
-            'relative flex h-8 cursor-text items-center rounded-lg border transition-[width,background-color,border-color] duration-200 ease-out',
-            query ? 'w-64 border-line bg-card/70' : 'w-8 border-transparent hover:bg-hover focus-within:w-64 focus-within:border-line focus-within:bg-card/70'
-          )}
-        >
-          <Search className="pointer-events-none absolute left-2 size-4 text-muted" />
-          <input
-            ref={searchRef}
-            value={query}
-            aria-label="Search all tasks"
-            onChange={(e) => setQuery(e.target.value)}
-            onKeyDown={(e) => e.key === 'Escape' && (setQuery(''), e.currentTarget.blur())}
-            className="h-full w-full min-w-0 bg-transparent pl-8 pr-7 text-[13px] outline-none"
-          />
-          {query && (
-            <button type="button" aria-label="Clear search" onClick={() => setQuery('')} className="absolute right-2 text-faint hover:text-fg">
-              <X className="size-3.5" />
-            </button>
-          )}
-        </label>
-
-        <div className="inline-flex h-8 items-center rounded-lg border border-line bg-card/70 p-0.5 text-[12px]">
-          {[
-            ['all', 'All'],
-            ['week', 'Due this week'],
-            ['overdue', 'Overdue'],
-          ].map(([key, label]) => (
-            <button
-              key={key}
-              type="button"
-              onClick={() => setDueFilter(key)}
-              className={cx('h-full rounded-md px-2.5 transition-colors', dueFilter === key ? 'bg-accent-soft font-medium text-fg' : 'text-muted hover:text-fg')}
+        {/* the calendar has its own list to filter; the board's filters don't apply to it */}
+        {view !== 'calendar' && (
+          <>
+            {/* icon-only until used: click or press / to expand; searches every field of every task */}
+            <label
+              title="Search everything (/)"
+              className={cx(
+                'relative flex h-8 cursor-text items-center rounded-lg border transition-[width,background-color,border-color] duration-200 ease-out',
+                query ? 'w-64 border-line bg-card/70' : 'w-8 border-transparent hover:bg-hover focus-within:w-64 focus-within:border-line focus-within:bg-card/70'
+              )}
             >
-              {label}
-              {key === 'overdue' && stats.overdue > 0 && <span className="ml-1 rounded-full bg-danger px-1.5 text-[10px] font-semibold text-card">{stats.overdue}</span>}
-            </button>
-          ))}
-        </div>
+              <Search className="pointer-events-none absolute left-2 size-4 text-muted" />
+              <input
+                ref={searchRef}
+                value={query}
+                aria-label="Search all tasks"
+                onChange={(e) => setQuery(e.target.value)}
+                onKeyDown={(e) => e.key === 'Escape' && (setQuery(''), e.currentTarget.blur())}
+                className="h-full w-full min-w-0 bg-transparent pl-8 pr-7 text-[13px] outline-none"
+              />
+              {query && (
+                <button type="button" aria-label="Clear search" onClick={() => setQuery('')} className="absolute right-2 text-faint hover:text-fg">
+                  <X className="size-3.5" />
+                </button>
+              )}
+            </label>
 
-        <TagFilter
-          names={boardTags}
-          selected={tagFilter}
-          onToggle={(name) => useBoard.getState().toggleTagFilter(name)}
-          onClear={() => useBoard.getState().clearTagFilter()}
-          onManage={() => setManageTags(true)}
-        />
-        <ManageTagsDialog open={manageTags} onClose={() => setManageTags(false)} />
+            <div className="inline-flex h-8 items-center rounded-lg border border-line bg-card/70 p-0.5 text-[12px]">
+              {[
+                ['all', 'All'],
+                ['week', 'Due this week'],
+                ['overdue', 'Overdue'],
+              ].map(([key, label]) => (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => setDueFilter(key)}
+                  className={cx('h-full rounded-md px-2.5 transition-colors', dueFilter === key ? 'bg-accent-soft font-medium text-fg' : 'text-muted hover:text-fg')}
+                >
+                  {label}
+                  {key === 'overdue' && stats.overdue > 0 && <span className="ml-1 rounded-full bg-danger px-1.5 text-[10px] font-semibold text-card">{stats.overdue}</span>}
+                </button>
+              ))}
+            </div>
+
+            <TagFilter
+              names={boardTags}
+              selected={tagFilter}
+              onToggle={(name) => useBoard.getState().toggleTagFilter(name)}
+              onClear={() => useBoard.getState().clearTagFilter()}
+              onManage={() => setManageTags(true)}
+            />
+            <ManageTagsDialog open={manageTags} onClose={() => setManageTags(false)} />
+          </>
+        )}
 
         {view === 'board' && <HiddenColumns />}
 

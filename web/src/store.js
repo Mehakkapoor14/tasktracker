@@ -48,8 +48,8 @@ export const useBoard = create((set, get) => {
     tags: [],
     tagFilter: [],
     homeTagFilter: [],
-    // how a project is shown ('board' | 'timeline') and how the home page lists projects ('cards' | 'timeline')
-    view: localStorage.getItem('tt-view') === 'timeline' ? 'timeline' : 'board',
+    // how a project is shown ('board' | 'timeline' | 'calendar') and how the home page lists projects ('cards' | 'timeline')
+    view: ['timeline', 'calendar'].includes(localStorage.getItem('tt-view')) ? localStorage.getItem('tt-view') : 'board',
     homeView: localStorage.getItem('tt-home-view') === 'timeline' ? 'timeline' : 'cards',
     homeSort: localStorage.getItem('tt-home-sort') === 'priority' ? 'priority' : 'custom',
     selectedId: null,

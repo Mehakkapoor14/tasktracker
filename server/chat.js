@@ -6,6 +6,7 @@ import * as store from './db.js';
 import { dueInfo, formatDuration } from '../shared/due.js';
 import { MAX_ACTIONS } from './actions.js';
 import { formatEstimate, formatHours, formatMoney } from '../shared/estimate.js';
+import { addDays, dayCapacity, dayDate, dayOf, formatMinutes, weekLabel, workload } from '../shared/calendar.js';
 
 /** Fence label for the block of proposed changes at the end of a reply (parsed by the web app). */
 export const ACTIONS_FENCE = 'tasktracker-actions';
@@ -95,6 +96,36 @@ export function boardContext({ projectId = null, now = new Date() } = {}) {
     .join('\n');
 }
 
+const hm = (ms) => `${pad(new Date(ms).getHours())}:${pad(new Date(ms).getMinutes())}`;
+
+function blockLine(o) {
+  const what = o.kind === 'task' ? `task time for #${o.taskId} ${o.task?.title ?? ''}`.trim() : `${o.title || (o.kind === 'off' ? 'Time off' : 'Busy')} (${o.kind === 'off' ? 'time off' : 'busy'})`;
+  const when = o.allDay ? 'all day' : `${hm(o.start)}–${hm(o.end)}`;
+  return `[block ${o.blockId}${o.repeat ? `, repeats ${o.repeat}, this one on ${o.day}` : ''}] ${when} ${what}`;
+}
+
+/** The next 7 days of the calendar: working hours, blocks, free time and whether the work due fits. */
+export function calendarContext({ now = new Date(), days = 7 } = {}) {
+  const today = dayOf(now);
+  const list = Array.from({ length: days }, (_, i) => addDays(today, i));
+  const { week, sessionMinutes } = store.getCalendarSettings();
+  const occurrences = store.listBlocks({ from: dayDate(today).getTime(), to: dayDate(addDays(today, days)).getTime() });
+  const load = workload(list, { week, occurrences, tasks: store.plannableTasks(), booked: store.bookedMinutes(now.getTime()), now: now.getTime() });
+  const lines = [`Working hours: ${weekLabel(week)}. Planned sessions are at most ${formatMinutes(sessionMinutes)}.`];
+  for (const day of list) {
+    const cap = dayCapacity(day, { week, occurrences, now: now.getTime() });
+    const mine = occurrences.filter((o) => o.start < dayDate(addDays(day, 1)).getTime() && o.end > dayDate(day).getTime());
+    const label = dayDate(day).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+    let line = `- ${label} (${day})${day === today ? ', today' : ''}: ${cap.work ? `${formatMinutes(day === today ? cap.freeLeft : cap.free)} free of ${formatMinutes(cap.work)} working` : 'no working hours'}`;
+    if (load[day]?.due) line += ` · ~${formatMinutes(load[day].due)} of estimated work due`;
+    if (load[day]?.short) line += ` · OVERBOOKED: ${formatMinutes(load[day].short)} more work is due by the end of this day than there is free time`;
+    if (mine.length) line += `\n  Blocks: ${mine.map(blockLine).join('; ')}`;
+    if (cap.freeSlots.length) line += `\n  Free: ${cap.freeSlots.map(([a, b]) => `${hm(a)}–${hm(b)}`).join(', ')}`;
+    lines.push(line);
+  }
+  return lines.join('\n');
+}
+
 export function systemPrompt(context) {
   return `You are the assistant built into Task Tracker, a local Kanban app. Help the user understand and plan their work using the snapshot of their projects and tasks below.
 
@@ -121,6 +152,17 @@ The block is a JSON array (at most ${MAX_ACTIONS} items) using these types:
 - {"type":"add_note","task":<id>,"text":"..."}
 - {"type":"create_project","name":"...","icon":"<one emoji>","description":"...","priority":"low|medium|high|urgent","tags":["..."]}
 - {"type":"update_project","project":"<name>", then any of "priority", "hourly_rate":<number or null>, "currency":"USD", "add_tags":["..."], "remove_tags":["..."]}
+- {"type":"schedule_tasks","from":"YYYY-MM-DD","to":"YYYY-MM-DD","priority":"<lowest priority to include, optional>","project":"<name, optional>","tasks":[<ids, optional>]}
+- {"type":"create_block","kind":"busy|task|off","title":"...","task":<id, for task time>,"start":"YYYY-MM-DDTHH:MM","end":"YYYY-MM-DDTHH:MM","repeat":"daily|weekdays|weekly|biweekly|monthly|yearly","repeat_until":"YYYY-MM-DD","note":"..."}. For a whole day or days (usually time off), give "start" and "end" as YYYY-MM-DD.
+- {"type":"update_block","block":<id>,"occurrence":"YYYY-MM-DD (to change one event of a repeating block)","scope":"one|all", then any of "title", "start", "end", "kind", "repeat", "note"}
+
+# Calendar
+The snapshot ends with the user's calendar for the next 7 days: working hours, blocks ("busy" = meetings and appointments, "task" = time booked to work on a task, "off" = time off) and free time.
+- To plan work into free time ("plan my week", "fit my high-priority tasks into my free time this week"), use one schedule_tasks action and let the app work out the times: it fits each task's remaining estimate into free working time, most important first and before deadlines. Don't calculate times yourself, and don't list the bookings in your reply: the user reviews each one on the approval card, including anything that didn't fit.
+- Use "priority":"high" for "high priority" (it includes urgent). Without "from"/"to" it plans from now to the end of this week.
+- Use create_block for a specific time the user names ("block 2–3pm tomorrow for the dentist", "I'm off next Friday", "a standup every weekday at 9:30").
+- Tasks need an estimate to be planned. If some don't have one, suggest estimates.
+- You can't remove calendar blocks; tell the user to remove them in the calendar.
 
 Tags appear as #name in the snapshot; reuse existing tag names where they fit.
 Estimates use sizes XS=30m, S=1h, M=4h, L=1d (8h), XL=3d, or exact amounts. Cost = estimate or tracked time × the project's hourly rate.
@@ -256,7 +298,7 @@ export async function streamChat({ messages, projectId, signal, onStart, write }
   const body = {
     model: cfg.model,
     stream: true,
-    messages: [{ role: 'system', content: systemPrompt(boardContext({ projectId })) }, ...cleanMessages(messages)],
+    messages: [{ role: 'system', content: systemPrompt(`${boardContext({ projectId })}\n\n## 🗓️ Calendar\n${calendarContext()}`) }, ...cleanMessages(messages)],
   };
 
   // give up if the provider doesn't start answering within a minute; once it streams, only the user stops it
